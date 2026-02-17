@@ -1,4 +1,4 @@
-fastapi
-uvicorn
-python-telegram-bot
-aiosqlite
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+python-telegram-bot==21.0
+aiosqlite==0.20.0
