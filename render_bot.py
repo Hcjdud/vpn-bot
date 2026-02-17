@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║         🌟 PLES VPN BOT v4.0 - ПОЛНАЯ АДМИН-ПАНЕЛЬ            ║
-║     Управление ценами • Названиями • Фото • Описаниями        ║
+║         🌟 PLES VPN BOT v4.0 - ИСПРАВЛЕННАЯ ВЕРСИЯ            ║
+║     Полная диагностика CryptoBot • Управление контентом       ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -28,7 +28,7 @@ import requests
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(as-time)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ class Config:
 
 config = Config()
 
-# ==================== CRYPTOBOT КЛИЕНТ ====================
+# ==================== CRYPTOBOT КЛИЕНТ (ИСПРАВЛЕННЫЙ) ====================
 
 class CryptoPay:
     def __init__(self, token: str):
@@ -72,8 +72,44 @@ class CryptoPay:
             "Content-Type": "application/json"
         }
     
+    async def check_connection(self) -> bool:
+        """Проверка доступности CryptoBot API"""
+        try:
+            url = f"{self.api_url}/getMe"
+            response = await asyncio.to_thread(
+                requests.get, url, headers=self.headers, timeout=5
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("ok"):
+                    app_info = result.get("result", {})
+                    logger.info(f"✅ CryptoBot доступен: {app_info.get('app_name')} (ID: {app_info.get('app_id')})")
+                    return True
+            
+            logger.error(f"❌ CryptoBot недоступен: статус {response.status_code}")
+            return False
+        except requests.exceptions.Timeout:
+            logger.error("❌ Таймаут при проверке CryptoBot")
+            return False
+        except requests.exceptions.ConnectionError:
+            logger.error("❌ Ошибка соединения с CryptoBot")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Неожиданная ошибка при проверке CryptoBot: {e}")
+            return False
+    
     async def create_invoice(self, amount_rub: float, payload: str) -> Optional[Dict]:
         try:
+            # Валидация входных данных
+            if amount_rub <= 0:
+                logger.error(f"❌ Некорректная сумма: {amount_rub}")
+                return None
+            
+            if not payload:
+                logger.error("❌ Отсутствует payload")
+                return None
+            
             url = f"{self.api_url}/createInvoice"
             data = {
                 "asset": "USDT",
@@ -88,20 +124,61 @@ class CryptoPay:
                 "allow_anonymous": False
             }
             
+            logger.info(f"📤 Отправка запроса в CryptoBot: сумма={amount_rub} RUB, payload={payload[:50]}...")
+            
             response = await asyncio.to_thread(
                 requests.post, url, headers=self.headers, json=data, timeout=10
             )
             
+            # Логируем ответ для отладки
+            logger.info(f"📥 Ответ от CryptoBot: статус {response.status_code}")
+            
             if response.status_code == 200:
                 result = response.json()
                 if result.get("ok"):
-                    return result["result"]
-            
-            logger.error(f"Ошибка CryptoBot: {response.text}")
+                    invoice_data = result["result"]
+                    logger.info(f"✅ Чек создан: ID={invoice_data['invoice_id']}, URL={invoice_data['bot_invoice_url']}")
+                    return invoice_data
+                else:
+                    # Обрабатываем ошибку от API
+                    error = result.get("error", {})
+                    error_code = error.get("code")
+                    error_name = error.get("name")
+                    logger.error(f"❌ Ошибка CryptoBot API: код={error_code}, название={error_name}")
+                    
+                    # Детальная диагностика ошибок
+                    if error_code == 400:
+                        logger.error("BAD_REQUEST: Проверьте параметры запроса (сумма, валюта)")
+                    elif error_code == 401:
+                        logger.error("UNAUTHORIZED: Неверный токен API")
+                    elif error_code == 422:
+                        logger.error("UNPROCESSABLE_ENTITY: Сумма слишком мала или неверный формат")
+                    
+                    return None
+            else:
+                # Обрабатываем HTTP ошибку
+                logger.error(f"❌ HTTP ошибка {response.status_code}: {response.text[:200]}")
+                
+                # Пробуем распарсить ошибку
+                try:
+                    error_json = response.json()
+                    if error_json.get("error"):
+                        logger.error(f"Детали ошибки: {error_json['error']}")
+                except:
+                    pass
+                
+                return None
+                
+        except requests.exceptions.Timeout:
+            logger.error("❌ Таймаут при запросе к CryptoBot")
             return None
-            
+        except requests.exceptions.ConnectionError:
+            logger.error("❌ Ошибка соединения с CryptoBot")
+            return None
         except Exception as e:
-            logger.error(f"Ошибка создания счета: {e}")
+            logger.error(f"❌ Неожиданная ошибка при создании чека: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     async def get_invoice_status(self, invoice_id: int) -> Optional[str]:
@@ -116,8 +193,13 @@ class CryptoPay:
             if response.status_code == 200:
                 result = response.json()
                 if result.get("ok") and result.get("result", {}).get("items"):
-                    return result["result"]["items"][0].get("status")
+                    items = result["result"]["items"]
+                    if items:
+                        status = items[0].get("status")
+                        logger.info(f"📊 Статус чека {invoice_id}: {status}")
+                        return status
             
+            logger.error(f"❌ Не удалось получить статус чека {invoice_id}")
             return None
             
         except Exception as e:
@@ -220,7 +302,7 @@ class Database:
                     )
                 ''')
                 
-                # 🌍 Таблица серверов (статическая, но можно расширить)
+                # 🌍 Таблица серверов
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS servers (
                         id TEXT PRIMARY KEY,
@@ -1108,7 +1190,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             success, msg = await UserManager.activate_trial(user_id)
             await send_new_message(context, user_id, msg, KeyboardBuilder.main(is_admin))
         
-        # ===== ПОКУПКА =====
+        # ===== ПОКУПКА (ИСПРАВЛЕННАЯ ВЕРСИЯ) =====
         elif data == "get_access":
             await send_new_message(context, user_id, "📦 ВЫБЕРИТЕ ТАРИФ", await KeyboardBuilder.plans())
         
@@ -1119,50 +1201,84 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if plan_id in plans:
                 plan = plans[plan_id]
                 
-                payload = json.dumps({
-                    "user_id": user_id,
-                    "plan_id": plan_id,
-                    "timestamp": datetime.now().timestamp()
-                })
-                
-                invoice = await crypto.create_invoice(plan["price"], payload)
-                
-                if invoice:
-                    await UserManager.save_crypto_payment(
-                        user_id=user_id,
-                        invoice_id=invoice["invoice_id"],
-                        plan_id=plan_id,
-                        amount_rub=plan["price"],
-                        payload=payload
-                    )
-                    
-                    text = (
-                        f"💎 <b>Оплата подписки {plan['name']}</b>\n\n"
-                        f"💰 Сумма: {plan['price']} ₽\n"
-                        f"📝 {plan.get('description', '')}\n"
-                        f"⏱ Счет действителен 1 час\n\n"
-                        f"1. Нажмите «Оплатить криптовалютой»\n"
-                        f"2. Выберите USDT/TON/BTC\n"
-                        f"3. После оплаты нажмите «Я оплатил»"
-                    )
-                    
-                    if plan.get("photo_id"):
+                try:
+                    # ВАЖНО: Проверяем сумму
+                    if plan["price"] <= 0:
+                        logger.error(f"❌ Некорректная цена тарифа {plan_id}: {plan['price']}")
                         await send_new_message(
                             context, 
                             user_id, 
-                            text, 
-                            KeyboardBuilder.payment(plan['name'], plan['price'], invoice["bot_invoice_url"], invoice["invoice_id"]),
-                            photo=plan["photo_id"]
+                            "❌ Ошибка: некорректная стоимость тарифа",
+                            KeyboardBuilder.main(is_admin)
                         )
+                        return
+                    
+                    # Создаем payload
+                    payload = json.dumps({
+                        "user_id": user_id,
+                        "plan_id": plan_id,
+                        "timestamp": datetime.now().timestamp()
+                    })
+                    
+                    logger.info(f"💰 Попытка создания чека: {plan['price']} RUB для пользователя {user_id}")
+                    
+                    # Создаем чек
+                    invoice = await crypto.create_invoice(plan["price"], payload)
+                    
+                    if invoice and invoice.get("invoice_id"):
+                        # Сохраняем в БД
+                        await UserManager.save_crypto_payment(
+                            user_id=user_id,
+                            invoice_id=invoice["invoice_id"],
+                            plan_id=plan_id,
+                            amount_rub=plan["price"],
+                            payload=payload
+                        )
+                        
+                        text = (
+                            f"💎 <b>Оплата подписки {plan['name']}</b>\n\n"
+                            f"💰 Сумма: {plan['price']} ₽\n"
+                            f"📝 {plan.get('description', '')}\n"
+                            f"⏱ Счет действителен 1 час\n\n"
+                            f"1. Нажмите «Оплатить криптовалютой»\n"
+                            f"2. Выберите USDT/TON/BTC\n"
+                            f"3. После оплаты нажмите «Я оплатил»"
+                        )
+                        
+                        if plan.get("photo_id"):
+                            await send_new_message(
+                                context, 
+                                user_id, 
+                                text, 
+                                KeyboardBuilder.payment(plan['name'], plan['price'], invoice["bot_invoice_url"], invoice["invoice_id"]),
+                                photo=plan["photo_id"]
+                            )
+                        else:
+                            await send_new_message(
+                                context, 
+                                user_id, 
+                                text, 
+                                KeyboardBuilder.payment(plan['name'], plan['price'], invoice["bot_invoice_url"], invoice["invoice_id"])
+                            )
                     else:
+                        logger.error(f"❌ Не удалось создать чек для пользователя {user_id}")
                         await send_new_message(
                             context, 
                             user_id, 
-                            text, 
-                            KeyboardBuilder.payment(plan['name'], plan['price'], invoice["bot_invoice_url"], invoice["invoice_id"])
+                            "❌ Ошибка создания чека. Пожалуйста, попробуйте позже или свяжитесь с поддержкой.",
+                            KeyboardBuilder.main(is_admin)
                         )
-                else:
-                    await send_new_message(context, user_id, "❌ Ошибка создания счета", KeyboardBuilder.main(is_admin))
+                        
+                except Exception as e:
+                    logger.error(f"❌ Критическая ошибка при создании чека: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    await send_new_message(
+                        context, 
+                        user_id, 
+                        "❌ Произошла ошибка. Попробуйте позже.",
+                        KeyboardBuilder.main(is_admin)
+                    )
             else:
                 await send_new_message(context, user_id, "❌ Тариф не найден", KeyboardBuilder.main(is_admin))
         
@@ -1824,15 +1940,24 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def startup():
     global telegram_app
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК PLES VPN BOT v4.0 (ПОЛНАЯ АДМИН-ПАНЕЛЬ)")
+    logger.info("🚀 ЗАПУСК PLES VPN BOT v4.0 (ИСПРАВЛЕННАЯ ВЕРСИЯ)")
     logger.info("=" * 60)
     
+    # Проверяем подключение к CryptoBot
+    crypto_ok = await crypto.check_connection()
+    if crypto_ok:
+        logger.info("✅ CryptoBot подключен успешно")
+    else:
+        logger.warning("⚠️ CryptoBot недоступен, проверьте токен")
+    
+    # Инициализация базы данных
     if await db.init():
         logger.info("✅ База данных готова")
     else:
         logger.error("❌ Ошибка базы данных")
         return
     
+    # Создание Telegram приложения
     telegram_app = Application.builder().token(config.BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
@@ -1842,14 +1967,15 @@ async def startup():
     await telegram_app.initialize()
     await telegram_app.start()
     
+    # Установка вебхука
     webhook_url = f"{config.BASE_URL}{config.WEBHOOK_PATH}"
     await telegram_app.bot.set_webhook(url=webhook_url)
     
+    # Запуск фоновой проверки платежей
     asyncio.create_task(check_pending_payments())
     
     logger.info(f"✅ Вебхук: {webhook_url}")
     logger.info(f"✅ Админы: {config.ADMIN_IDS}")
-    logger.info(f"✅ CryptoBot: подключен")
     logger.info("✅ Бот готов!")
     logger.info("=" * 60)
 
@@ -1896,9 +2022,9 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
-        "ples_vpn_bot_full_admin:app",
+        "ples_vpn_bot_fixed_crypto:app",
         host="0.0.0.0",
         port=port,
         reload=False,
         log_level="info"
-        )
+                )
