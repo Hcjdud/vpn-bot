@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: vpn-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn render_bot:app
+    envVars:
+      - key: RENDER_EXTERNAL_HOSTNAME
+        value: your-subdomain.onrender.com
