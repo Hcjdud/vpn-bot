@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║         🌟 PLES VPN BOT v4.0 - ИСПРАВЛЕННАЯ ВЕРСИЯ            ║
-║     Полная диагностика CryptoBot • Управление контентом       ║
+║         🌟 PLES VPN BOT v4.0 - ФИНАЛЬНАЯ ВЕРСИЯ               ║
+║     CryptoBot исправлен • Чеки работают • Полная диагностика  ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -73,9 +73,11 @@ class CryptoPay:
         }
     
     async def check_connection(self) -> bool:
-        """Проверка доступности CryptoBot API"""
+        """Проверка доступности CryptoBot API и валидности токена"""
         try:
             url = f"{self.api_url}/getMe"
+            logger.info("🔍 Проверка подключения к CryptoBot...")
+            
             response = await asyncio.to_thread(
                 requests.get, url, headers=self.headers, timeout=5
             )
@@ -86,17 +88,18 @@ class CryptoPay:
                     app_info = result.get("result", {})
                     logger.info(f"✅ CryptoBot доступен: {app_info.get('app_name')} (ID: {app_info.get('app_id')})")
                     return True
-            
-            logger.error(f"❌ CryptoBot недоступен: статус {response.status_code}")
-            return False
-        except requests.exceptions.Timeout:
-            logger.error("❌ Таймаут при проверке CryptoBot")
-            return False
-        except requests.exceptions.ConnectionError:
-            logger.error("❌ Ошибка соединения с CryptoBot")
-            return False
+                else:
+                    error = result.get("error", {})
+                    logger.error(f"❌ Ошибка API: {error}")
+                    return False
+            else:
+                logger.error(f"❌ HTTP ошибка {response.status_code}")
+                if response.status_code == 401:
+                    logger.error("❌ НЕВЕРНЫЙ ТОКЕН API! Проверьте CRYPTOBOT_TOKEN в настройках.")
+                return False
+                
         except Exception as e:
-            logger.error(f"❌ Неожиданная ошибка при проверке CryptoBot: {e}")
+            logger.error(f"❌ Ошибка подключения к CryptoBot: {e}")
             return False
     
     async def create_invoice(self, amount_rub: float, payload: str) -> Optional[Dict]:
@@ -111,12 +114,18 @@ class CryptoPay:
                 return None
             
             url = f"{self.api_url}/createInvoice"
+            
+            # Минимальная сумма для USDT в рублях
+            if amount_rub < 50:
+                logger.warning(f"⚠️ Сумма {amount_rub} RUB меньше рекомендуемого минимума (50 RUB)")
+            
+            # ИСПРАВЛЕНИЕ: accepted_assets должен быть строкой через запятую, а не массивом
             data = {
                 "asset": "USDT",
                 "amount": str(amount_rub),
                 "currency_type": "fiat",
                 "fiat": "RUB",
-                "accepted_assets": ["USDT", "TON", "BTC"],
+                "accepted_assets": "USDT,TON,BTC",  # Строка через запятую!
                 "description": f"Оплата VPN на {amount_rub} RUB",
                 "payload": payload,
                 "expires_in": 3600,
@@ -124,49 +133,28 @@ class CryptoPay:
                 "allow_anonymous": False
             }
             
-            logger.info(f"📤 Отправка запроса в CryptoBot: сумма={amount_rub} RUB, payload={payload[:50]}...")
+            logger.info(f"📤 Отправка запроса в CryptoBot: сумма={amount_rub} RUB")
             
             response = await asyncio.to_thread(
                 requests.post, url, headers=self.headers, json=data, timeout=10
             )
             
-            # Логируем ответ для отладки
+            # Подробное логирование ответа
             logger.info(f"📥 Ответ от CryptoBot: статус {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
                 if result.get("ok"):
                     invoice_data = result["result"]
-                    logger.info(f"✅ Чек создан: ID={invoice_data['invoice_id']}, URL={invoice_data['bot_invoice_url']}")
+                    logger.info(f"✅ Чек создан: ID={invoice_data['invoice_id']}")
+                    logger.info(f"🔗 Ссылка на оплату: {invoice_data.get('bot_invoice_url')}")
                     return invoice_data
                 else:
-                    # Обрабатываем ошибку от API
                     error = result.get("error", {})
-                    error_code = error.get("code")
-                    error_name = error.get("name")
-                    logger.error(f"❌ Ошибка CryptoBot API: код={error_code}, название={error_name}")
-                    
-                    # Детальная диагностика ошибок
-                    if error_code == 400:
-                        logger.error("BAD_REQUEST: Проверьте параметры запроса (сумма, валюта)")
-                    elif error_code == 401:
-                        logger.error("UNAUTHORIZED: Неверный токен API")
-                    elif error_code == 422:
-                        logger.error("UNPROCESSABLE_ENTITY: Сумма слишком мала или неверный формат")
-                    
+                    logger.error(f"❌ Ошибка CryptoBot API: {error}")
                     return None
             else:
-                # Обрабатываем HTTP ошибку
-                logger.error(f"❌ HTTP ошибка {response.status_code}: {response.text[:200]}")
-                
-                # Пробуем распарсить ошибку
-                try:
-                    error_json = response.json()
-                    if error_json.get("error"):
-                        logger.error(f"Детали ошибки: {error_json['error']}")
-                except:
-                    pass
-                
+                logger.error(f"❌ HTTP ошибка {response.status_code}: {response.text}")
                 return None
                 
         except requests.exceptions.Timeout:
@@ -176,7 +164,7 @@ class CryptoPay:
             logger.error("❌ Ошибка соединения с CryptoBot")
             return None
         except Exception as e:
-            logger.error(f"❌ Неожиданная ошибка при создании чека: {e}")
+            logger.error(f"❌ Неожиданная ошибка: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -1190,7 +1178,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             success, msg = await UserManager.activate_trial(user_id)
             await send_new_message(context, user_id, msg, KeyboardBuilder.main(is_admin))
         
-        # ===== ПОКУПКА (ИСПРАВЛЕННАЯ ВЕРСИЯ) =====
+        # ===== ПОКУПКА =====
         elif data == "get_access":
             await send_new_message(context, user_id, "📦 ВЫБЕРИТЕ ТАРИФ", await KeyboardBuilder.plans())
         
@@ -1202,7 +1190,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 plan = plans[plan_id]
                 
                 try:
-                    # ВАЖНО: Проверяем сумму
+                    # Проверяем сумму
                     if plan["price"] <= 0:
                         logger.error(f"❌ Некорректная цена тарифа {plan_id}: {plan['price']}")
                         await send_new_message(
@@ -1940,7 +1928,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def startup():
     global telegram_app
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК PLES VPN BOT v4.0 (ИСПРАВЛЕННАЯ ВЕРСИЯ)")
+    logger.info("🚀 ЗАПУСК PLES VPN BOT v4.0 (ФИНАЛЬНАЯ ВЕРСИЯ)")
     logger.info("=" * 60)
     
     # Проверяем подключение к CryptoBot
@@ -1948,7 +1936,7 @@ async def startup():
     if crypto_ok:
         logger.info("✅ CryptoBot подключен успешно")
     else:
-        logger.warning("⚠️ CryptoBot недоступен, проверьте токен")
+        logger.warning("⚠️ CryptoBot недоступен, платежи могут не работать!")
     
     # Инициализация базы данных
     if await db.init():
@@ -2022,9 +2010,9 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
-        "ples_vpn_bot_fixed_crypto:app",
+        "ples_vpn_bot_final_fixed:app",
         host="0.0.0.0",
         port=port,
         reload=False,
         log_level="info"
-                )
+)
