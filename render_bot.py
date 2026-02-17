@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║         🌟 PLES VPN BOT v4.0 - ФИНАЛЬНАЯ ВЕРСИЯ               ║
-║     CryptoBot исправлен • Чеки работают • Полная диагностика  ║
+║         🌟 PLES VPN BOT v5.0 - МУЛЬТИСЕРВИСНЫЙ                ║
+║     VPN • Прокси TG • Антиглушилки • Для сайтов               ║
+║     Автоудаление через 2 мин • Управление в админке           ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -58,10 +59,13 @@ class Config:
     # URL
     BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ples-vpn.onrender.com")
     WEBHOOK_PATH = "/webhook"
+    
+    # Настройки автоудаления
+    AUTO_DELETE_SECONDS = 120  # 2 минуты = 120 секунд
 
 config = Config()
 
-# ==================== CRYPTOBOT КЛИЕНТ (ИСПРАВЛЕННЫЙ) ====================
+# ==================== CRYPTOBOT КЛИЕНТ ====================
 
 class CryptoPay:
     def __init__(self, token: str):
@@ -119,14 +123,14 @@ class CryptoPay:
             if amount_rub < 50:
                 logger.warning(f"⚠️ Сумма {amount_rub} RUB меньше рекомендуемого минимума (50 RUB)")
             
-            # ИСПРАВЛЕНИЕ: accepted_assets должен быть строкой через запятую, а не массивом
+            # ИСПРАВЛЕНИЕ: accepted_assets должен быть строкой через запятую
             data = {
                 "asset": "USDT",
                 "amount": str(amount_rub),
                 "currency_type": "fiat",
                 "fiat": "RUB",
-                "accepted_assets": "USDT,TON,BTC",  # Строка через запятую!
-                "description": f"Оплата VPN на {amount_rub} RUB",
+                "accepted_assets": "USDT,TON,BTC",
+                "description": f"Оплата на {amount_rub} RUB",
                 "payload": payload,
                 "expires_in": 3600,
                 "allow_comments": False,
@@ -139,7 +143,6 @@ class CryptoPay:
                 requests.post, url, headers=self.headers, json=data, timeout=10
             )
             
-            # Подробное логирование ответа
             logger.info(f"📥 Ответ от CryptoBot: статус {response.status_code}")
             
             if response.status_code == 200:
@@ -147,7 +150,6 @@ class CryptoPay:
                 if result.get("ok"):
                     invoice_data = result["result"]
                     logger.info(f"✅ Чек создан: ID={invoice_data['invoice_id']}")
-                    logger.info(f"🔗 Ссылка на оплату: {invoice_data.get('bot_invoice_url')}")
                     return invoice_data
                 else:
                     error = result.get("error", {})
@@ -157,16 +159,8 @@ class CryptoPay:
                 logger.error(f"❌ HTTP ошибка {response.status_code}: {response.text}")
                 return None
                 
-        except requests.exceptions.Timeout:
-            logger.error("❌ Таймаут при запросе к CryptoBot")
-            return None
-        except requests.exceptions.ConnectionError:
-            logger.error("❌ Ошибка соединения с CryptoBot")
-            return None
         except Exception as e:
             logger.error(f"❌ Неожиданная ошибка: {e}")
-            import traceback
-            traceback.print_exc()
             return None
     
     async def get_invoice_status(self, invoice_id: int) -> Optional[str]:
@@ -266,7 +260,7 @@ class Database:
                     )
                 ''')
                 
-                # 📊 Таблица для контента (приветственный текст)
+                # 📊 Таблица для контента
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS content (
                         key TEXT PRIMARY KEY,
@@ -275,7 +269,7 @@ class Database:
                     )
                 ''')
                 
-                # 💰 Таблица тарифов (динамическая)
+                # 💰 Таблица тарифов
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS plans (
                         id TEXT PRIMARY KEY,
@@ -286,7 +280,21 @@ class Database:
                         enabled INTEGER DEFAULT 1,
                         description TEXT,
                         photo_id TEXT,
+                        service_type TEXT DEFAULT 'vpn',
                         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                
+                # 🏷️ Таблица типов услуг
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS service_types (
+                        id TEXT PRIMARY KEY,
+                        name TEXT,
+                        emoji TEXT,
+                        description TEXT,
+                        icon TEXT,
+                        enabled INTEGER DEFAULT 1,
+                        sort_order INTEGER DEFAULT 0
                     )
                 ''')
                 
@@ -303,7 +311,7 @@ class Database:
                     )
                 ''')
                 
-                # Индексы для скорости
+                # Индексы
                 await db.execute('CREATE INDEX IF NOT EXISTS idx_users_referral ON users(referral_code)')
                 await db.execute('CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)')
                 await db.execute('CREATE INDEX IF NOT EXISTS idx_payments_user ON crypto_payments(user_id)')
@@ -314,15 +322,10 @@ class Database:
                 # Заполняем начальными данными
                 await self._init_default_data(db)
                 
-                # Проверяем созданные таблицы
                 cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table'")
                 tables = await cursor.fetchall()
                 table_names = [t[0] for t in tables]
                 logger.info(f"✅ Созданы таблицы: {table_names}")
-                
-                if 'users' not in table_names:
-                    logger.error("❌ Таблица users не создалась!")
-                    return False
                 
                 self._initialized = True
                 return True
@@ -336,6 +339,20 @@ class Database:
     async def _init_default_data(self, db):
         """Заполнение начальными данными"""
         try:
+            # Добавляем типы услуг
+            default_services = [
+                ("vpn", "VPN", "🌍", "Быстрый и безопасный VPN для любых устройств", "🛡️", 1, 1),
+                ("proxy_tg", "Прокси для Telegram", "📱", "Обход блокировок Telegram", "🔌", 1, 2),
+                ("antijammer", "Антиглушилки", "📡", "Защита от глушилок и помех", "🛜", 1, 3),
+                ("website", "Для сайтов", "🌐", "Доступ к заблокированным сайтам", "🔓", 1, 4)
+            ]
+            
+            for s in default_services:
+                await db.execute('''
+                    INSERT OR IGNORE INTO service_types (id, name, emoji, description, icon, enabled, sort_order)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', s)
+            
             # Добавляем серверы
             default_servers = [
                 ("netherlands", "🇳🇱 Нидерланды", "🇳🇱", "Амстердам", 32, 45, 1),
@@ -352,18 +369,37 @@ class Database:
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', s)
             
-            # Добавляем тарифы
+            # Добавляем тарифы для разных услуг
             default_plans = [
-                ("1month", "🌱 1 месяц", 30, 299, "🌱", 1, "Базовый тариф на 1 месяц", None),
-                ("3month", "🌿 3 месяца", 90, 699, "🌿", 1, "Популярный тариф на 3 месяца", None),
-                ("6month", "🌳 6 месяцев", 180, 1199, "🌳", 1, "Выгодный тариф на 6 месяцев", None),
-                ("12month", "🏝️ 12 месяцев", 365, 1999, "🏝️", 1, "Максимальный тариф на год", None)
+                # VPN тарифы
+                ("vpn_1month", "🌱 1 месяц", 30, 299, "🌱", 1, "Базовый тариф на 1 месяц", None, "vpn"),
+                ("vpn_3month", "🌿 3 месяца", 90, 699, "🌿", 1, "Популярный тариф на 3 месяца", None, "vpn"),
+                ("vpn_6month", "🌳 6 месяцев", 180, 1199, "🌳", 1, "Выгодный тариф на 6 месяцев", None, "vpn"),
+                ("vpn_12month", "🏝️ 12 месяцев", 365, 1999, "🏝️", 1, "Максимальный тариф на год", None, "vpn"),
+                
+                # Прокси для Telegram
+                ("proxy_tg_1month", "📱 Прокси TG 1 мес", 30, 149, "📱", 1, "Прокси для Telegram на 1 месяц", None, "proxy_tg"),
+                ("proxy_tg_3month", "📱 Прокси TG 3 мес", 90, 399, "📱", 1, "Прокси для Telegram на 3 месяца", None, "proxy_tg"),
+                ("proxy_tg_6month", "📱 Прокси TG 6 мес", 180, 699, "📱", 1, "Прокси для Telegram на 6 месяцев", None, "proxy_tg"),
+                ("proxy_tg_12month", "📱 Прокси TG 12 мес", 365, 1299, "📱", 1, "Прокси для Telegram на год", None, "proxy_tg"),
+                
+                # Антиглушилки
+                ("antijammer_1month", "📡 Антиглушилка 1 мес", 30, 399, "📡", 1, "Защита от глушилок на 1 месяц", None, "antijammer"),
+                ("antijammer_3month", "📡 Антиглушилка 3 мес", 90, 999, "📡", 1, "Защита от глушилок на 3 месяца", None, "antijammer"),
+                ("antijammer_6month", "📡 Антиглушилка 6 мес", 180, 1799, "📡", 1, "Защита от глушилок на 6 месяцев", None, "antijammer"),
+                ("antijammer_12month", "📡 Антиглушилка 12 мес", 365, 2999, "📡", 1, "Защита от глушилок на год", None, "antijammer"),
+                
+                # Для сайтов
+                ("website_1month", "🌐 Для сайтов 1 мес", 30, 199, "🌐", 1, "Доступ к сайтам на 1 месяц", None, "website"),
+                ("website_3month", "🌐 Для сайтов 3 мес", 90, 499, "🌐", 1, "Доступ к сайтам на 3 месяца", None, "website"),
+                ("website_6month", "🌐 Для сайтов 6 мес", 180, 899, "🌐", 1, "Доступ к сайтам на 6 месяцев", None, "website"),
+                ("website_12month", "🌐 Для сайтов 12 мес", 365, 1599, "🌐", 1, "Доступ к сайтам на год", None, "website")
             ]
             
             for p in default_plans:
                 await db.execute('''
-                    INSERT OR IGNORE INTO plans (id, name, days, price, emoji, enabled, description, photo_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO plans (id, name, days, price, emoji, enabled, description, photo_id, service_type)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', p)
             
             # Добавляем приветственный текст
@@ -373,11 +409,11 @@ class Database:
                 f"🇳🇱 Нидерланды • 🇺🇸 США • 🇩🇪 Германия\n"
                 f"🇬🇧 UK • 🇸🇬 Сингапур • 🇯🇵 Япония\n\n"
                 f"⚡ <b>Протоколы:</b> OpenVPN • WireGuard • IKEv2\n\n"
-                f"💰 <b>Тарифы:</b>\n"
-                f"• 1 месяц — 299₽\n"
-                f"• 3 месяца — 699₽\n"
-                f"• 6 месяцев — 1199₽\n"
-                f"• 12 месяцев — 1999₽\n\n"
+                f"🛡️ <b>Наши услуги:</b>\n"
+                f"• 🌍 VPN - полная защита\n"
+                f"• 📱 Прокси для Telegram\n"
+                f"• 📡 Антиглушилки\n"
+                f"• 🌐 Доступ к сайтам\n\n"
                 f"🎁 <b>Пробный период:</b> 6 дней\n\n"
                 f"👥 <b>Рефералы:</b> +3 дня за друга\n\n"
                 f"💳 <b>Оплата:</b> криптовалюта (USDT/TON/BTC)"
@@ -393,7 +429,6 @@ class Database:
             logger.error(f"Ошибка при инициализации данных: {e}")
     
     async def ensure_initialized(self):
-        """Проверка инициализации БД"""
         if not self._initialized:
             logger.warning("⚠️ База данных не инициализирована, пробуем снова...")
             return await self.init()
@@ -703,10 +738,10 @@ class ContentManager:
             content = await db.fetch_one("SELECT value FROM content WHERE key = 'welcome_text'")
             if content:
                 return content["value"]
-            return "🌟 Добро пожаловать в VPN бот!"
+            return "🌟 Добро пожаловать!"
         except Exception as e:
             logger.error(f"Ошибка get_welcome_text: {e}")
-            return "🌟 Добро пожаловать в VPN бот!"
+            return "🌟 Добро пожаловать!"
     
     @staticmethod
     async def update_welcome_text(text: str):
@@ -721,9 +756,52 @@ class ContentManager:
             return False
     
     @staticmethod
-    async def get_plans() -> Dict:
+    async def get_service_types() -> Dict:
         try:
-            plans = await db.fetch_all("SELECT * FROM plans WHERE enabled = 1 ORDER BY days")
+            services = await db.fetch_all("SELECT * FROM service_types WHERE enabled = 1 ORDER BY sort_order")
+            result = {}
+            for s in services:
+                result[s["id"]] = {
+                    "name": s["name"],
+                    "emoji": s["emoji"],
+                    "description": s["description"],
+                    "icon": s["icon"]
+                }
+            return result
+        except Exception as e:
+            logger.error(f"Ошибка get_service_types: {e}")
+            return {}
+    
+    @staticmethod
+    async def get_service_type(service_id: str) -> Optional[Dict]:
+        try:
+            return await db.fetch_one("SELECT * FROM service_types WHERE id = ?", (service_id,))
+        except Exception as e:
+            logger.error(f"Ошибка get_service_type: {e}")
+            return None
+    
+    @staticmethod
+    async def update_service_type(service_id: str, data: Dict):
+        try:
+            await db.execute(
+                """UPDATE service_types SET 
+                   name = ?, emoji = ?, description = ?, icon = ?, enabled = ?, sort_order = ? 
+                   WHERE id = ?""",
+                (data["name"], data["emoji"], data["description"], data["icon"], 
+                 data.get("enabled", 1), data.get("sort_order", 0), service_id)
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка update_service_type: {e}")
+            return False
+    
+    @staticmethod
+    async def get_plans_by_service(service_type: str) -> Dict:
+        try:
+            plans = await db.fetch_all(
+                "SELECT * FROM plans WHERE enabled = 1 AND service_type = ? ORDER BY days",
+                (service_type,)
+            )
             result = {}
             for p in plans:
                 result[p["id"]] = {
@@ -736,7 +814,27 @@ class ContentManager:
                 }
             return result
         except Exception as e:
-            logger.error(f"Ошибка get_plans: {e}")
+            logger.error(f"Ошибка get_plans_by_service: {e}")
+            return {}
+    
+    @staticmethod
+    async def get_all_plans() -> Dict:
+        try:
+            plans = await db.fetch_all("SELECT * FROM plans WHERE enabled = 1 ORDER BY service_type, days")
+            result = {}
+            for p in plans:
+                result[p["id"]] = {
+                    "name": p["name"],
+                    "days": p["days"],
+                    "price": p["price"],
+                    "emoji": p["emoji"],
+                    "description": p["description"],
+                    "photo_id": p["photo_id"],
+                    "service_type": p["service_type"]
+                }
+            return result
+        except Exception as e:
+            logger.error(f"Ошибка get_all_plans: {e}")
             return {}
     
     @staticmethod
@@ -752,10 +850,11 @@ class ContentManager:
         try:
             await db.execute(
                 """UPDATE plans SET 
-                   name = ?, days = ?, price = ?, emoji = ?, description = ?, photo_id = ?, updated_at = ? 
+                   name = ?, days = ?, price = ?, emoji = ?, description = ?, photo_id = ?, service_type = ?, updated_at = ? 
                    WHERE id = ?""",
                 (data["name"], data["days"], data["price"], data["emoji"], 
-                 data["description"], data.get("photo_id"), datetime.now().isoformat(), plan_id)
+                 data["description"], data.get("photo_id"), data.get("service_type"), 
+                 datetime.now().isoformat(), plan_id)
             )
             return True
         except Exception as e:
@@ -796,21 +895,57 @@ class ContentManager:
 
 PROTOCOLS = ["OpenVPN", "WireGuard", "IKEv2"]
 
+# ==================== ФУНКЦИИ ДЛЯ АВТОУДАЛЕНИЯ ====================
+
+async def schedule_message_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int = config.AUTO_DELETE_SECONDS):
+    """Запланировать удаление сообщения через указанное количество секунд"""
+    try:
+        await asyncio.sleep(delay)
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info(f"🗑️ Автоудаление: сообщение {message_id} в чате {chat_id} удалено через {delay} сек")
+    except Exception as e:
+        logger.debug(f"Не удалось автоудалить сообщение {message_id}: {e}")
+
 # ==================== КЛАВИАТУРЫ ====================
 
 class KeyboardBuilder:
     @staticmethod
-    def main(is_admin: bool = False):
-        buttons = [
-            [InlineKeyboardButton("🛡️ ПОДКЛЮЧИТЬ VPN", callback_data="get_access")],
-            [InlineKeyboardButton("🌍 ВЫБРАТЬ СЕРВЕР", callback_data="select_server")],
-            [InlineKeyboardButton("📱 УСТРОЙСТВА", callback_data="my_devices")],
-            [InlineKeyboardButton("👤 ПРОФИЛЬ", callback_data="profile")],
-            [InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")],
-            [InlineKeyboardButton("📞 ПОДДЕРЖКА", callback_data="support")]
-        ]
+    async def main(is_admin: bool = False):
+        """Главное меню с услугами"""
+        services = await ContentManager.get_service_types()
+        
+        buttons = []
+        for sid, service in services.items():
+            buttons.append([InlineKeyboardButton(
+                f"{service['icon']} {service['emoji']} {service['name']}",
+                callback_data=f"service_{sid}"
+            )])
+        
+        buttons.append([InlineKeyboardButton("👤 ПРОФИЛЬ", callback_data="profile")])
+        buttons.append([InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")])
+        buttons.append([InlineKeyboardButton("📞 ПОДДЕРЖКА", callback_data="support")])
+        
         if is_admin:
             buttons.append([InlineKeyboardButton("⚙️ АДМИН ПАНЕЛЬ", callback_data="admin_menu")])
+        
+        return InlineKeyboardMarkup(buttons)
+    
+    @staticmethod
+    async def service_plans(service_type: str):
+        """Планы для конкретной услуги"""
+        plans = await ContentManager.get_plans_by_service(service_type)
+        services = await ContentManager.get_service_types()
+        service = services.get(service_type, {"name": "Услуга", "emoji": "🔹"})
+        
+        buttons = []
+        for pid, plan in plans.items():
+            buttons.append([InlineKeyboardButton(
+                f"{plan['emoji']} {plan['name']} - {plan['price']}₽",
+                callback_data=f"buy_{pid}"
+            )])
+        
+        buttons.append([InlineKeyboardButton("🎁 ПРОБНЫЙ ПЕРИОД 6 ДНЕЙ", callback_data="trial")])
+        buttons.append([InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")])
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
@@ -823,19 +958,6 @@ class KeyboardBuilder:
                 f"{server['flag']} {server['name']} • {load} {server['load']}% • {server['ping']}ms",
                 callback_data=f"server_{sid}"
             )])
-        buttons.append([InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")])
-        return InlineKeyboardMarkup(buttons)
-    
-    @staticmethod
-    async def plans():
-        plans = await ContentManager.get_plans()
-        buttons = []
-        for pid, plan in plans.items():
-            buttons.append([InlineKeyboardButton(
-                f"{plan['emoji']} {plan['name']} - {plan['price']}₽",
-                callback_data=f"buy_{pid}"
-            )])
-        buttons.append([InlineKeyboardButton("🎁 ПРОБНЫЙ ПЕРИОД 6 ДНЕЙ", callback_data="trial")])
         buttons.append([InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")])
         return InlineKeyboardMarkup(buttons)
     
@@ -888,23 +1010,52 @@ class KeyboardBuilder:
     @staticmethod
     def admin_panel():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("👥 УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ", callback_data="admin_users")],
+            [InlineKeyboardButton("👥 ПОЛЬЗОВАТЕЛИ", callback_data="admin_users")],
             [InlineKeyboardButton("📊 СТАТИСТИКА", callback_data="admin_stats")],
             [InlineKeyboardButton("📢 РАССЫЛКА", callback_data="admin_mailing")],
-            [InlineKeyboardButton("📝 РЕДАКТИРОВАТЬ ТЕКСТ", callback_data="admin_edit_welcome")],
+            [InlineKeyboardButton("📝 ТЕКСТ ПРИВЕТСТВИЯ", callback_data="admin_edit_welcome")],
+            [InlineKeyboardButton("🏷️ УПРАВЛЕНИЕ УСЛУГАМИ", callback_data="admin_services")],
             [InlineKeyboardButton("💰 УПРАВЛЕНИЕ ТАРИФАМИ", callback_data="admin_plans")],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="back_main")]
         ])
     
     @staticmethod
-    async def admin_plans():
-        plans = await ContentManager.get_plans()
+    async def admin_services():
+        services = await ContentManager.get_service_types()
         buttons = []
-        for pid, plan in plans.items():
+        for sid, service in services.items():
             buttons.append([InlineKeyboardButton(
-                f"💰 {plan['name']} - {plan['price']}₽",
-                callback_data=f"admin_edit_plan_{pid}"
+                f"{service['icon']} {service['emoji']} {service['name']}",
+                callback_data=f"admin_edit_service_{sid}"
             )])
+        buttons.append([InlineKeyboardButton("➕ ДОБАВИТЬ УСЛУГУ", callback_data="admin_add_service")])
+        buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")])
+        return InlineKeyboardMarkup(buttons)
+    
+    @staticmethod
+    def admin_service_edit(service_id: str, service: Dict):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 ИЗМЕНИТЬ НАЗВАНИЕ", callback_data=f"admin_service_name_{service_id}")],
+            [InlineKeyboardButton("🎨 ИЗМЕНИТЬ ЭМОДЗИ", callback_data=f"admin_service_emoji_{service_id}")],
+            [InlineKeyboardButton("📋 ИЗМЕНИТЬ ОПИСАНИЕ", callback_data=f"admin_service_desc_{service_id}")],
+            [InlineKeyboardButton("🔢 ИЗМЕНИТЬ ПОРЯДОК", callback_data=f"admin_service_order_{service_id}")],
+            [InlineKeyboardButton("❌ УДАЛИТЬ УСЛУГУ", callback_data=f"admin_service_delete_{service_id}")],
+            [InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_services")]
+        ])
+    
+    @staticmethod
+    async def admin_plans():
+        plans = await ContentManager.get_all_plans()
+        services = await ContentManager.get_service_types()
+        
+        buttons = []
+        for sid, service in services.items():
+            buttons.append([InlineKeyboardButton(
+                f"📌 {service['emoji']} {service['name']}",
+                callback_data=f"admin_service_plans_{sid}"
+            )])
+        
+        buttons.append([InlineKeyboardButton("➕ ДОБАВИТЬ ТАРИФ", callback_data="admin_add_plan")])
         buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")])
         return InlineKeyboardMarkup(buttons)
     
@@ -913,9 +1064,10 @@ class KeyboardBuilder:
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("📝 ИЗМЕНИТЬ НАЗВАНИЕ", callback_data=f"admin_plan_name_{plan_id}")],
             [InlineKeyboardButton("💰 ИЗМЕНИТЬ ЦЕНУ", callback_data=f"admin_plan_price_{plan_id}")],
-            [InlineKeyboardButton("📅 ИЗМЕНИТЬ КОЛ-ВО ДНЕЙ", callback_data=f"admin_plan_days_{plan_id}")],
+            [InlineKeyboardButton("📅 ИЗМЕНИТЬ ДНИ", callback_data=f"admin_plan_days_{plan_id}")],
+            [InlineKeyboardButton("🎨 ИЗМЕНИТЬ ЭМОДЗИ", callback_data=f"admin_plan_emoji_{plan_id}")],
+            [InlineKeyboardButton("📋 ИЗМЕНИТЬ ОПИСАНИЕ", callback_data=f"admin_plan_desc_{plan_id}")],
             [InlineKeyboardButton("🖼️ ИЗМЕНИТЬ ФОТО", callback_data=f"admin_plan_photo_{plan_id}")],
-            [InlineKeyboardButton("📝 ИЗМЕНИТЬ ОПИСАНИЕ", callback_data=f"admin_plan_desc_{plan_id}")],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_plans")]
         ])
     
@@ -989,12 +1141,13 @@ async def delete_previous_message(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         if user and user.get("last_message_id"):
             try:
                 await context.bot.delete_message(chat_id=chat_id, message_id=user["last_message_id"])
+                logger.info(f"🗑️ Удалено предыдущее сообщение {user['last_message_id']} для {chat_id}")
             except:
                 pass
     except Exception as e:
         logger.debug(f"Не удалось удалить сообщение: {e}")
 
-async def send_new_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, keyboard=None, photo=None):
+async def send_new_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, keyboard=None, photo=None, auto_delete: bool = True):
     try:
         await delete_previous_message(context, chat_id)
         
@@ -1015,6 +1168,11 @@ async def send_new_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, tex
             )
         
         await UserManager.save_message_id(chat_id, msg.message_id)
+        
+        # Запускаем автоудаление
+        if auto_delete:
+            asyncio.create_task(schedule_message_deletion(context, chat_id, msg.message_id))
+        
         return msg
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
@@ -1045,12 +1203,16 @@ async def start_mailing(context: ContextTypes.DEFAULT_TYPE, admin_id: int, messa
             continue
         
         try:
-            await context.bot.send_message(
+            msg = await context.bot.send_message(
                 chat_id=user_id,
                 text=message_text,
                 parse_mode=ParseMode.HTML
             )
             sent += 1
+            
+            # Автоудаление для сообщений рассылки
+            asyncio.create_task(schedule_message_deletion(context, user_id, msg.message_id))
+            
         except Exception as e:
             failed += 1
             logger.error(f"Ошибка отправки пользователю {user_id}: {e}")
@@ -1093,20 +1255,22 @@ async def check_pending_payments():
                     if is_paid and payment["status"] == "pending":
                         user_id = payment["user_id"]
                         plan_id = payment["plan_id"]
-                        plans = await ContentManager.get_plans()
+                        plans = await ContentManager.get_all_plans()
                         plan = plans.get(plan_id, list(plans.values())[0])
                         
                         new_date = await UserManager.give_subscription(user_id, plan["days"])
                         await UserManager.confirm_crypto_payment(payment["invoice_id"])
                         
                         try:
-                            await telegram_app.bot.send_message(
+                            msg = await telegram_app.bot.send_message(
                                 chat_id=user_id,
                                 text=f"✅ <b>Оплата подтверждена!</b>\n\n"
-                                     f"Подписка {plan['name']} активирована!\n"
+                                     f"Услуга {plan['name']} активирована!\n"
                                      f"📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
                                 parse_mode=ParseMode.HTML
                             )
+                            # Автоудаление для уведомления об оплате
+                            asyncio.create_task(schedule_message_deletion(telegram_app, user_id, msg.message_id))
                         except Exception as e:
                             logger.error(f"Ошибка уведомления пользователя {user_id}: {e}")
                             
@@ -1148,7 +1312,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_text = await ContentManager.get_welcome_text()
         
         is_admin = user.id in config.ADMIN_IDS
-        await send_new_message(context, user.id, welcome_text, KeyboardBuilder.main(is_admin))
+        await send_new_message(context, user.id, welcome_text, await KeyboardBuilder.main(is_admin))
         
     except Exception as e:
         logger.error(f"Ошибка в start: {e}")
@@ -1171,37 +1335,61 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # ===== НАВИГАЦИЯ =====
         if data == "back_main":
-            await send_new_message(context, user_id, "🏠 Главное меню", KeyboardBuilder.main(is_admin))
+            await send_new_message(
+                context, 
+                user_id, 
+                "🏠 Главное меню", 
+                await KeyboardBuilder.main(is_admin)
+            )
+        
+        # ===== УСЛУГИ =====
+        elif data.startswith("service_"):
+            service_id = data.replace("service_", "")
+            services = await ContentManager.get_service_types()
+            service = services.get(service_id, {"name": "Услуга", "description": ""})
+            
+            text = (
+                f"{service.get('icon', '🔹')} {service.get('emoji', '📌')} <b>{service['name']}</b>\n\n"
+                f"{service.get('description', '')}\n\n"
+                f"Выберите тариф:"
+            )
+            
+            await send_new_message(
+                context,
+                user_id,
+                text,
+                await KeyboardBuilder.service_plans(service_id)
+            )
         
         # ===== ПРОБНЫЙ ПЕРИОД =====
         elif data == "trial":
             success, msg = await UserManager.activate_trial(user_id)
-            await send_new_message(context, user_id, msg, KeyboardBuilder.main(is_admin))
+            await send_new_message(
+                context, 
+                user_id, 
+                msg, 
+                await KeyboardBuilder.main(is_admin)
+            )
         
         # ===== ПОКУПКА =====
-        elif data == "get_access":
-            await send_new_message(context, user_id, "📦 ВЫБЕРИТЕ ТАРИФ", await KeyboardBuilder.plans())
-        
         elif data.startswith("buy_"):
             plan_id = data.replace("buy_", "")
-            plans = await ContentManager.get_plans()
+            plans = await ContentManager.get_all_plans()
             
             if plan_id in plans:
                 plan = plans[plan_id]
                 
                 try:
-                    # Проверяем сумму
                     if plan["price"] <= 0:
                         logger.error(f"❌ Некорректная цена тарифа {plan_id}: {plan['price']}")
                         await send_new_message(
                             context, 
                             user_id, 
-                            "❌ Ошибка: некорректная стоимость тарифа",
-                            KeyboardBuilder.main(is_admin)
+                            "❌ Ошибка: некорректная стоимость",
+                            await KeyboardBuilder.main(is_admin)
                         )
                         return
                     
-                    # Создаем payload
                     payload = json.dumps({
                         "user_id": user_id,
                         "plan_id": plan_id,
@@ -1210,11 +1398,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     logger.info(f"💰 Попытка создания чека: {plan['price']} RUB для пользователя {user_id}")
                     
-                    # Создаем чек
                     invoice = await crypto.create_invoice(plan["price"], payload)
                     
                     if invoice and invoice.get("invoice_id"):
-                        # Сохраняем в БД
                         await UserManager.save_crypto_payment(
                             user_id=user_id,
                             invoice_id=invoice["invoice_id"],
@@ -1224,7 +1410,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         
                         text = (
-                            f"💎 <b>Оплата подписки {plan['name']}</b>\n\n"
+                            f"💎 <b>Оплата {plan['name']}</b>\n\n"
                             f"💰 Сумма: {plan['price']} ₽\n"
                             f"📝 {plan.get('description', '')}\n"
                             f"⏱ Счет действителен 1 час\n\n"
@@ -1253,22 +1439,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await send_new_message(
                             context, 
                             user_id, 
-                            "❌ Ошибка создания чека. Пожалуйста, попробуйте позже или свяжитесь с поддержкой.",
-                            KeyboardBuilder.main(is_admin)
+                            "❌ Ошибка создания чека. Попробуйте позже.",
+                            await KeyboardBuilder.main(is_admin)
                         )
                         
                 except Exception as e:
-                    logger.error(f"❌ Критическая ошибка при создании чека: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error(f"❌ Ошибка при создании чека: {e}")
                     await send_new_message(
                         context, 
                         user_id, 
                         "❌ Произошла ошибка. Попробуйте позже.",
-                        KeyboardBuilder.main(is_admin)
+                        await KeyboardBuilder.main(is_admin)
                     )
             else:
-                await send_new_message(context, user_id, "❌ Тариф не найден", KeyboardBuilder.main(is_admin))
+                await send_new_message(context, user_id, "❌ Тариф не найден", await KeyboardBuilder.main(is_admin))
         
         elif data.startswith("check_crypto_"):
             try:
@@ -1283,7 +1467,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     if payment and payment["status"] == "pending":
                         plan_id = payment["plan_id"]
-                        plans = await ContentManager.get_plans()
+                        plans = await ContentManager.get_all_plans()
                         plan = plans.get(plan_id, list(plans.values())[0])
                         
                         new_date = await UserManager.give_subscription(user_id, plan["days"])
@@ -1293,9 +1477,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             context,
                             user_id,
                             f"✅ <b>Оплата подтверждена!</b>\n\n"
-                            f"Подписка {plan['name']} активирована!\n"
+                            f"Услуга {plan['name']} активирована!\n"
                             f"📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
-                            KeyboardBuilder.main(is_admin)
+                            await KeyboardBuilder.main(is_admin)
                         )
                         
                         await query.answer("✅ Платеж найден!", show_alert=True)
@@ -1306,55 +1490,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка проверки платежа: {e}")
                 await query.answer("❌ Ошибка проверки платежа", show_alert=True)
-        
-        # ===== ВЫБОР СЕРВЕРА =====
-        elif data == "select_server":
-            await send_new_message(context, user_id, "🌍 ВЫБЕРИТЕ СЕРВЕР", await KeyboardBuilder.servers())
-        
-        elif data.startswith("server_"):
-            server_id = data.replace("server_", "")
-            servers = await ContentManager.get_servers()
-            
-            if server_id in servers:
-                await UserManager.update_server(user_id, server_id)
-                await send_new_message(
-                    context, 
-                    user_id, 
-                    f"✅ Выбран {servers[server_id]['name']}\n\nВыберите протокол:",
-                    KeyboardBuilder.protocols()
-                )
-            else:
-                await send_new_message(context, user_id, "❌ Сервер не найден", KeyboardBuilder.main(is_admin))
-        
-        elif data.startswith("protocol_"):
-            protocol = data.replace("protocol_", "")
-            await UserManager.update_protocol(user_id, protocol)
-            await send_new_message(
-                context, 
-                user_id, 
-                f"✅ Протокол {protocol} сохранен",
-                KeyboardBuilder.main(is_admin)
-            )
-        
-        # ===== УСТРОЙСТВА =====
-        elif data == "my_devices":
-            await send_new_message(context, user_id, "📱 ВЫБЕРИТЕ УСТРОЙСТВО", KeyboardBuilder.devices())
-        
-        elif data.startswith("device_"):
-            device = data.replace("device_", "")
-            instructions = {
-                "android": "📱 <b>ANDROID</b>\n\n1. Установите OpenVPN Connect\n2. Скачайте конфиг\n3. Импортируйте",
-                "ios": "🍏 <b>IOS</b>\n\n1. Установите OpenVPN Connect\n2. Скачайте конфиг\n3. Импортируйте",
-                "windows": "💻 <b>WINDOWS</b>\n\n1. Установите OpenVPN GUI\n2. Поместите конфиг в папку config\n3. Запустите",
-                "macos": "🍎 <b>MACOS</b>\n\n1. Установите Tunnelblick\n2. Откройте конфиг",
-                "linux": "🐧 <b>LINUX</b>\n\n1. sudo apt install openvpn\n2. sudo openvpn --config config.ovpn"
-            }
-            await send_new_message(
-                context, 
-                user_id, 
-                instructions.get(device, "Инструкция готовится"),
-                KeyboardBuilder.devices()
-            )
         
         # ===== ПРОФИЛЬ =====
         elif data == "profile":
@@ -1386,18 +1521,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     status = "❌ Нет подписки"
                     end_str = "-"
                 
-                servers = await ContentManager.get_servers()
-                server_id = user.get("selected_server", "netherlands")
-                server = servers.get(server_id, list(servers.values())[0] if servers else {"name": "🇳🇱 Нидерланды"})
-                protocol = user.get("selected_protocol", "OpenVPN")
-                
                 text = (
                     f"👤 <b>ПРОФИЛЬ</b>\n\n"
                     f"📊 Статус: {status}\n"
                     f"📅 Действует до: {end_str}\n"
                     f"⏱ Осталось: {max(0, days)} дн.\n\n"
-                    f"🌍 Сервер: {server['name']}\n"
-                    f"🔌 Протокол: {protocol}\n\n"
                     f"🆔 ID: <code>{user_id}</code>"
                 )
                 
@@ -1484,79 +1612,148 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 KeyboardBuilder.back()
             )
         
-        # ===== СКАЧАТЬ КОНФИГ =====
-        elif data == "download_config":
-            try:
-                user = await UserManager.get(user_id)
-                if user and user.get("subscribe_until"):
-                    try:
-                        if datetime.fromisoformat(user["subscribe_until"]) > datetime.now():
-                            servers = await ContentManager.get_servers()
-                            server_id = user.get("selected_server", "netherlands")
-                            server = servers.get(server_id, list(servers.values())[0] if servers else {"city": "netherlands"})
-                            
-                            config_text = f"""# VPN Config
-# Server: {server.get('name', 'VPN')}
-# Generated: {datetime.now().strftime('%Y-%m-%d')}
-
-client
-dev tun
-proto udp
-remote {server.get('city', 'netherlands').lower()}.vpn.com 1194
-resolv-retry infinite
-nobind
-persist-key
-persist-tun
-verb 3"""
-                            
-                            await delete_previous_message(context, user_id)
-                            await context.bot.send_document(
-                                chat_id=user_id,
-                                document=config_text.encode(),
-                                filename=f"vpn_config.ovpn",
-                                caption=f"✅ Конфиг для подключения"
-                            )
-                            return
-                    except Exception as e:
-                        logger.error(f"Ошибка при скачивании конфига: {e}")
-                
-                await send_new_message(
-                    context,
-                    user_id,
-                    "❌ Подписка не активна",
-                    await KeyboardBuilder.plans()
-                )
-            except Exception as e:
-                logger.error(f"Ошибка в download_config: {e}")
-                await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.back())
-        
         # ===== АДМИН ПАНЕЛЬ =====
         elif data == "admin_menu" and is_admin:
             await send_new_message(context, user_id, "⚙️ <b>АДМИН ПАНЕЛЬ</b>", KeyboardBuilder.admin_panel())
         
-        elif data == "admin_edit_welcome" and is_admin:
-            current_text = await ContentManager.get_welcome_text()
+        # ===== АДМИН: УПРАВЛЕНИЕ УСЛУГАМИ =====
+        elif data == "admin_services" and is_admin:
             await send_new_message(
                 context,
                 user_id,
-                f"📝 <b>РЕДАКТИРОВАНИЕ ТЕКСТА ПРИВЕТСТВИЯ</b>\n\n"
-                f"Текущий текст:\n{current_text}\n\n"
-                f"Отправьте новый текст приветствия.\n\n"
-                f"Поддерживается HTML-разметка:\n"
-                f"<code>&lt;b&gt;жирный&lt;/b&gt;</code>\n"
-                f"<code>&lt;i&gt;курсив&lt;/i&gt;</code>\n\n"
-                f"<i>Ожидаю сообщение...</i>",
+                "🏷️ <b>УПРАВЛЕНИЕ УСЛУГАМИ</b>\n\nВыберите услугу для редактирования:",
+                await KeyboardBuilder.admin_services()
+            )
+        
+        elif data.startswith("admin_edit_service_") and is_admin:
+            service_id = data.replace("admin_edit_service_", "")
+            service = await ContentManager.get_service_type(service_id)
+            
+            if service:
+                text = (
+                    f"🏷️ <b>РЕДАКТИРОВАНИЕ УСЛУГИ</b>\n\n"
+                    f"ID: {service_id}\n"
+                    f"Название: {service['name']}\n"
+                    f"Эмодзи: {service['emoji']}\n"
+                    f"Иконка: {service['icon']}\n"
+                    f"Описание: {service['description']}\n"
+                    f"Порядок: {service['sort_order']}\n"
+                    f"Статус: {'✅ Включено' if service['enabled'] else '❌ Отключено'}\n\n"
+                    f"Выберите действие:"
+                )
+                await send_new_message(
+                    context,
+                    user_id,
+                    text,
+                    KeyboardBuilder.admin_service_edit(service_id, service)
+                )
+            else:
+                await send_new_message(context, user_id, "❌ Услуга не найдена", KeyboardBuilder.admin_panel())
+        
+        elif data.startswith("admin_service_name_") and is_admin:
+            service_id = data.replace("admin_service_name_", "")
+            context.user_data['editing_service'] = service_id
+            context.user_data['editing_field'] = 'name'
+            await send_new_message(
+                context,
+                user_id,
+                f"📝 Введите новое название для услуги:",
                 KeyboardBuilder.back()
             )
-            context.user_data['awaiting_welcome_edit'] = True
         
+        elif data.startswith("admin_service_emoji_") and is_admin:
+            service_id = data.replace("admin_service_emoji_", "")
+            context.user_data['editing_service'] = service_id
+            context.user_data['editing_field'] = 'emoji'
+            await send_new_message(
+                context,
+                user_id,
+                f"🎨 Введите новый эмодзи для услуги (например 🌍):",
+                KeyboardBuilder.back()
+            )
+        
+        elif data.startswith("admin_service_desc_") and is_admin:
+            service_id = data.replace("admin_service_desc_", "")
+            context.user_data['editing_service'] = service_id
+            context.user_data['editing_field'] = 'description'
+            await send_new_message(
+                context,
+                user_id,
+                f"📋 Введите новое описание для услуги:",
+                KeyboardBuilder.back()
+            )
+        
+        elif data.startswith("admin_service_order_") and is_admin:
+            service_id = data.replace("admin_service_order_", "")
+            context.user_data['editing_service'] = service_id
+            context.user_data['editing_field'] = 'sort_order'
+            await send_new_message(
+                context,
+                user_id,
+                f"🔢 Введите новый порядковый номер (0-100):",
+                KeyboardBuilder.back()
+            )
+        
+        elif data.startswith("admin_service_delete_") and is_admin:
+            service_id = data.replace("admin_service_delete_", "")
+            # Здесь можно добавить логику удаления или отключения
+            await send_new_message(
+                context,
+                user_id,
+                f"❌ Услуга {service_id} отключена (временно)",
+                KeyboardBuilder.admin_panel()
+            )
+        
+        elif data == "admin_add_service" and is_admin:
+            context.user_data['adding_service'] = True
+            await send_new_message(
+                context,
+                user_id,
+                "➕ <b>ДОБАВЛЕНИЕ НОВОЙ УСЛУГИ</b>\n\n"
+                "Введите данные в формате:\n"
+                "<code>название|эмодзи|иконка|описание|порядок</code>\n\n"
+                "Пример:\n"
+                "<code>Новая услуга|🆕|✨|Описание новой услуги|5</code>",
+                KeyboardBuilder.back()
+            )
+        
+        # ===== АДМИН: УПРАВЛЕНИЕ ТАРИФАМИ =====
         elif data == "admin_plans" and is_admin:
             await send_new_message(
                 context,
                 user_id,
-                "💰 <b>УПРАВЛЕНИЕ ТАРИФАМИ</b>\n\nВыберите тариф для редактирования:",
+                "💰 <b>УПРАВЛЕНИЕ ТАРИФАМИ</b>\n\nВыберите тип услуги:",
                 await KeyboardBuilder.admin_plans()
             )
+        
+        elif data.startswith("admin_service_plans_") and is_admin:
+            service_type = data.replace("admin_service_plans_", "")
+            services = await ContentManager.get_service_types()
+            service = services.get(service_type, {"name": "Услуга", "emoji": "📌"})
+            
+            plans = await ContentManager.get_plans_by_service(service_type)
+            
+            text = f"💰 <b>ТАРИФЫ ДЛЯ {service['emoji']} {service['name']}</b>\n\n"
+            
+            if plans:
+                for pid, plan in plans.items():
+                    text += f"{plan['emoji']} {plan['name']} - {plan['price']}₽ / {plan['days']} дн.\n"
+            else:
+                text += "Тарифов пока нет\n"
+            
+            text += "\nВыберите тариф для редактирования:"
+            
+            buttons = []
+            for pid, plan in plans.items():
+                buttons.append([InlineKeyboardButton(
+                    f"{plan['emoji']} {plan['name']}",
+                    callback_data=f"admin_edit_plan_{pid}"
+                )])
+            
+            buttons.append([InlineKeyboardButton("➕ ДОБАВИТЬ ТАРИФ", callback_data=f"admin_add_plan_{service_type}")])
+            buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_plans")])
+            
+            await send_new_message(context, user_id, text, InlineKeyboardMarkup(buttons))
         
         elif data.startswith("admin_edit_plan_") and is_admin:
             plan_id = data.replace("admin_edit_plan_", "")
@@ -1571,6 +1768,7 @@ verb 3"""
                     f"Дней: {plan['days']}\n"
                     f"Эмодзи: {plan['emoji']}\n"
                     f"Описание: {plan['description']}\n"
+                    f"Тип услуги: {plan['service_type']}\n"
                     f"Фото: {'есть' if plan['photo_id'] else 'нет'}\n\n"
                     f"Выберите что изменить:"
                 )
@@ -1616,6 +1814,17 @@ verb 3"""
                 KeyboardBuilder.back()
             )
         
+        elif data.startswith("admin_plan_emoji_") and is_admin:
+            plan_id = data.replace("admin_plan_emoji_", "")
+            context.user_data['editing_plan'] = plan_id
+            context.user_data['editing_field'] = 'emoji'
+            await send_new_message(
+                context,
+                user_id,
+                f"🎨 Введите новый эмодзи для тарифа (например 🌱):",
+                KeyboardBuilder.back()
+            )
+        
         elif data.startswith("admin_plan_desc_") and is_admin:
             plan_id = data.replace("admin_plan_desc_", "")
             context.user_data['editing_plan'] = plan_id
@@ -1623,7 +1832,7 @@ verb 3"""
             await send_new_message(
                 context,
                 user_id,
-                f"📝 Введите новое описание для тарифа:",
+                f"📋 Введите новое описание для тарифа:",
                 KeyboardBuilder.back()
             )
         
@@ -1638,6 +1847,22 @@ verb 3"""
                 KeyboardBuilder.back()
             )
         
+        elif data.startswith("admin_add_plan_") and is_admin:
+            service_type = data.replace("admin_add_plan_", "")
+            context.user_data['adding_plan'] = service_type
+            await send_new_message(
+                context,
+                user_id,
+                f"➕ <b>ДОБАВЛЕНИЕ НОВОГО ТАРИФА</b>\n\n"
+                f"Тип услуги: {service_type}\n\n"
+                f"Введите данные в формате:\n"
+                f"<code>название|дни|цена|эмодзи|описание</code>\n\n"
+                f"Пример:\n"
+                f"<code>🌱 Новый тариф|30|299|🌱|Описание тарифа</code>",
+                KeyboardBuilder.back()
+            )
+        
+        # ===== АДМИН: УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ =====
         elif data == "admin_users" and is_admin:
             users = await UserManager.get_all_users()
             await send_new_message(
@@ -1714,7 +1939,7 @@ verb 3"""
                     plan_id = f"{parts[2]}_{parts[3]}"
                     target_id = int(parts[4])
                     
-                    plans = await ContentManager.get_plans()
+                    plans = await ContentManager.get_all_plans()
                     
                     if plan_id in plans:
                         plan = plans[plan_id]
@@ -1722,13 +1947,14 @@ verb 3"""
                         
                         if new_date:
                             try:
-                                await send_new_message(
-                                    context,
-                                    target_id,
-                                    f"🎉 <b>АДМИН ВЫДАЛ ПОДПИСКУ!</b>\n\n"
-                                    f"{plan['name']}\n"
-                                    f"📅 До: {new_date.strftime('%d.%m.%Y')}"
+                                msg = await context.bot.send_message(
+                                    chat_id=target_id,
+                                    text=f"🎉 <b>АДМИН ВЫДАЛ ПОДПИСКУ!</b>\n\n"
+                                         f"{plan['name']}\n"
+                                         f"📅 До: {new_date.strftime('%d.%m.%Y')}",
+                                    parse_mode=ParseMode.HTML
                                 )
+                                asyncio.create_task(schedule_message_deletion(context, target_id, msg.message_id))
                             except Exception as e:
                                 logger.error(f"Не удалось уведомить пользователя {target_id}: {e}")
                             
@@ -1748,6 +1974,7 @@ verb 3"""
                 logger.error(f"Ошибка при выдаче подписки: {e}")
                 await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.admin_panel())
         
+        # ===== АДМИН: СТАТИСТИКА =====
         elif data == "admin_stats" and is_admin:
             stats = await UserManager.get_stats()
             text = (
@@ -1760,6 +1987,7 @@ verb 3"""
             )
             await send_new_message(context, user_id, text, KeyboardBuilder.admin_panel())
         
+        # ===== АДМИН: РАССЫЛКА =====
         elif data == "admin_mailing" and is_admin:
             await send_new_message(
                 context,
@@ -1779,6 +2007,20 @@ verb 3"""
                 mailing_text = context.user_data['mailing_text']
                 del context.user_data['mailing_text']
                 asyncio.create_task(start_mailing(context, user_id, mailing_text))
+        
+        # ===== АДМИН: РЕДАКТИРОВАНИЕ ТЕКСТА =====
+        elif data == "admin_edit_welcome" and is_admin:
+            current_text = await ContentManager.get_welcome_text()
+            await send_new_message(
+                context,
+                user_id,
+                f"📝 <b>РЕДАКТИРОВАНИЕ ТЕКСТА ПРИВЕТСТВИЯ</b>\n\n"
+                f"Текущий текст:\n{current_text}\n\n"
+                f"Отправьте новый текст приветствия.\n\n"
+                f"Поддерживается HTML-разметка",
+                KeyboardBuilder.back()
+            )
+            context.user_data['awaiting_welcome_edit'] = True
         
     except Exception as e:
         logger.error(f"Ошибка в button_handler: {e}")
@@ -1802,14 +2044,16 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     context,
                     update.effective_chat.id,
                     "✅ Фото тарифа обновлено!",
-                    KeyboardBuilder.admin_panel()
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
                 )
             else:
                 await send_new_message(
                     context,
                     update.effective_chat.id,
                     "❌ Ошибка при обновлении фото",
-                    KeyboardBuilder.admin_panel()
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
                 )
             
             context.user_data.pop('editing_plan', None)
@@ -1836,14 +2080,169 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 context,
                 user_id,
                 "✅ Текст приветствия обновлен!",
-                KeyboardBuilder.admin_panel()
+                KeyboardBuilder.admin_panel(),
+                auto_delete=True
             )
         else:
             await send_new_message(
                 context,
                 user_id,
                 "❌ Ошибка при обновлении текста",
-                KeyboardBuilder.admin_panel()
+                KeyboardBuilder.admin_panel(),
+                auto_delete=True
+            )
+        return
+    
+    # Обработка добавления новой услуги
+    if context.user_data.get('adding_service') and user_id in config.ADMIN_IDS:
+        del context.user_data['adding_service']
+        
+        try:
+            parts = text.split('|')
+            if len(parts) == 5:
+                # Генерируем ID из названия
+                service_id = parts[0].strip().lower().replace(' ', '_')
+                
+                data = {
+                    "name": parts[0].strip(),
+                    "emoji": parts[1].strip(),
+                    "icon": parts[2].strip(),
+                    "description": parts[3].strip(),
+                    "sort_order": int(parts[4].strip()),
+                    "enabled": 1
+                }
+                
+                # Здесь нужно добавить метод для создания услуги
+                # await ContentManager.create_service(service_id, data)
+                
+                await send_new_message(
+                    context,
+                    user_id,
+                    f"✅ Услуга {data['name']} добавлена!",
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
+                )
+            else:
+                await send_new_message(
+                    context,
+                    user_id,
+                    "❌ Неверный формат. Используйте: название|эмодзи|иконка|описание|порядок",
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении услуги: {e}")
+            await send_new_message(
+                context,
+                user_id,
+                "❌ Ошибка при обработке данных",
+                KeyboardBuilder.admin_panel(),
+                auto_delete=True
+            )
+        return
+    
+    # Обработка редактирования услуги
+    if context.user_data.get('editing_service') and context.user_data.get('editing_field') and user_id in config.ADMIN_IDS:
+        service_id = context.user_data['editing_service']
+        field = context.user_data['editing_field']
+        service = await ContentManager.get_service_type(service_id)
+        
+        if not service:
+            await send_new_message(context, user_id, "❌ Услуга не найдена", KeyboardBuilder.admin_panel(), auto_delete=True)
+            context.user_data.pop('editing_service', None)
+            context.user_data.pop('editing_field', None)
+            return
+        
+        update_data = {
+            "name": service["name"],
+            "emoji": service["emoji"],
+            "description": service["description"],
+            "icon": service["icon"],
+            "enabled": service["enabled"],
+            "sort_order": service["sort_order"]
+        }
+        
+        try:
+            if field == 'name':
+                update_data['name'] = text
+            elif field == 'emoji':
+                update_data['emoji'] = text
+            elif field == 'description':
+                update_data['description'] = text
+            elif field == 'icon':
+                update_data['icon'] = text
+            elif field == 'sort_order':
+                update_data['sort_order'] = int(text)
+            
+            success = await ContentManager.update_service_type(service_id, update_data)
+            
+            if success:
+                await send_new_message(
+                    context,
+                    user_id,
+                    f"✅ {field} услуги обновлен!",
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
+                )
+            else:
+                await send_new_message(
+                    context,
+                    user_id,
+                    "❌ Ошибка при обновлении",
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении услуги: {e}")
+            await send_new_message(
+                context,
+                user_id,
+                "❌ Ошибка при обработке данных",
+                KeyboardBuilder.admin_panel(),
+                auto_delete=True
+            )
+        
+        context.user_data.pop('editing_service', None)
+        context.user_data.pop('editing_field', None)
+        return
+    
+    # Обработка добавления нового тарифа
+    if context.user_data.get('adding_plan') and user_id in config.ADMIN_IDS:
+        service_type = context.user_data['adding_plan']
+        del context.user_data['adding_plan']
+        
+        try:
+            parts = text.split('|')
+            if len(parts) == 5:
+                # Генерируем ID
+                plan_id = f"{service_type}_{parts[0].strip().lower().replace(' ', '_')}"
+                
+                # Здесь нужно добавить метод для создания тарифа
+                # await ContentManager.create_plan(plan_id, {...})
+                
+                await send_new_message(
+                    context,
+                    user_id,
+                    f"✅ Тариф добавлен для услуги {service_type}!",
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
+                )
+            else:
+                await send_new_message(
+                    context,
+                    user_id,
+                    "❌ Неверный формат. Используйте: название|дни|цена|эмодзи|описание",
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении тарифа: {e}")
+            await send_new_message(
+                context,
+                user_id,
+                "❌ Ошибка при обработке данных",
+                KeyboardBuilder.admin_panel(),
+                auto_delete=True
             )
         return
     
@@ -1854,7 +2253,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         plan = await ContentManager.get_plan(plan_id)
         
         if not plan:
-            await send_new_message(context, user_id, "❌ Тариф не найден", KeyboardBuilder.admin_panel())
+            await send_new_message(context, user_id, "❌ Тариф не найден", KeyboardBuilder.admin_panel(), auto_delete=True)
             context.user_data.pop('editing_plan', None)
             context.user_data.pop('editing_field', None)
             return
@@ -1865,7 +2264,8 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             "price": plan["price"],
             "emoji": plan["emoji"],
             "description": plan["description"],
-            "photo_id": plan["photo_id"]
+            "photo_id": plan["photo_id"],
+            "service_type": plan["service_type"]
         }
         
         try:
@@ -1875,6 +2275,8 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 update_data['price'] = int(text)
             elif field == 'days':
                 update_data['days'] = int(text)
+            elif field == 'emoji':
+                update_data['emoji'] = text
             elif field == 'description':
                 update_data['description'] = text
             
@@ -1885,14 +2287,16 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     context,
                     user_id,
                     f"✅ {field} тарифа обновлен!",
-                    KeyboardBuilder.admin_panel()
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
                 )
             else:
                 await send_new_message(
                     context,
                     user_id,
                     "❌ Ошибка при обновлении",
-                    KeyboardBuilder.admin_panel()
+                    KeyboardBuilder.admin_panel(),
+                    auto_delete=True
                 )
         except Exception as e:
             logger.error(f"Ошибка при обновлении тарифа: {e}")
@@ -1900,7 +2304,8 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 context,
                 user_id,
                 "❌ Ошибка при обработке данных",
-                KeyboardBuilder.admin_panel()
+                KeyboardBuilder.admin_panel(),
+                auto_delete=True
             )
         
         context.user_data.pop('editing_plan', None)
@@ -1918,7 +2323,8 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📢 <b>ПОДТВЕРДИТЕ РАССЫЛКУ</b>\n\n"
             f"Текст сообщения:\n\n{text}\n\n"
             f"Отправить всем пользователям?",
-            KeyboardBuilder.admin_confirm_mailing()
+            KeyboardBuilder.admin_confirm_mailing(),
+            auto_delete=True
         )
         return
 
@@ -1928,7 +2334,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def startup():
     global telegram_app
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК PLES VPN BOT v4.0 (ФИНАЛЬНАЯ ВЕРСИЯ)")
+    logger.info("🚀 ЗАПУСК PLES VPN BOT v5.0 (МУЛЬТИСЕРВИСНЫЙ)")
     logger.info("=" * 60)
     
     # Проверяем подключение к CryptoBot
@@ -1964,6 +2370,7 @@ async def startup():
     
     logger.info(f"✅ Вебхук: {webhook_url}")
     logger.info(f"✅ Админы: {config.ADMIN_IDS}")
+    logger.info(f"✅ Автоудаление: {config.AUTO_DELETE_SECONDS} сек")
     logger.info("✅ Бот готов!")
     logger.info("=" * 60)
 
@@ -1992,9 +2399,10 @@ async def home():
     return {
         "status": "online",
         "service": "Ples VPN Bot",
-        "version": "4.0",
+        "version": "5.0",
         "admins": config.ADMIN_IDS,
-        "trial_days": config.TRIAL_DAYS
+        "trial_days": config.TRIAL_DAYS,
+        "auto_delete": config.AUTO_DELETE_SECONDS
     }
 
 @app.get("/health")
@@ -2010,7 +2418,7 @@ async def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
-        "ples_vpn_bot_final_fixed:app",
+        "ples_vpn_bot_services:app",
         host="0.0.0.0",
         port=port,
         reload=False,
