@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║         🌟 PLES VPN BOT v11.0 - ДВУХКОЛОНОЧНОЕ МЕНЮ           ║
-║     Красивое меню в 2 колонки • Удобная навигация             ║
-║     Режим техработ • Уведомления всем пользователям           ║
+║         🌟 PLES VPN BOT v17.0 - С БАЛАНСОМ                    ║
+║     Баланс в профиле • Пополнение • Автосписание              ║
+║     Без 3x-UI • Система тикетов • Рефералы                    ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -27,7 +27,6 @@ from telegram.constants import ParseMode
 import aiosqlite
 import requests
 import aiohttp
-from py3xui import AsyncApi
 import qrcode
 from qrcode.image.pure import PyPNGImage
 
@@ -50,18 +49,12 @@ class Config:
     REQUIRED_CHANNEL = "@numberbor"
     BOT_USERNAME = "Playinc_bot"
     
+    # Группа для тикетов - ЗАМЕНИТЕ НА ID ВАШЕЙ ГРУППЫ
+    TICKET_GROUP_ID = -1003880204174  # ID вашей группы
+    
     # CryptoBot
     CRYPTOBOT_TOKEN = "533707:AAyjZJjRSCxePyVGl6WYFx3rfWqgxZLhjvi"
     CRYPTOBOT_API = "https://pay.crypt.bot/api"
-    
-    # 3x-UI Panel
-    XUI_PANEL_URL = os.environ.get("XUI_PANEL_URL", "http://your-server.com:2053")
-    XUI_USERNAME = os.environ.get("XUI_USERNAME", "admin")
-    XUI_PASSWORD = os.environ.get("XUI_PASSWORD", "admin")
-    XUI_EXTERNAL_IP = os.environ.get("XUI_EXTERNAL_IP", "your-server.com")
-    XUI_SERVER_PORT = int(os.environ.get("XUI_SERVER_PORT", "443"))
-    XUI_INBOUND_ID = int(os.environ.get("XUI_INBOUND_ID", "1"))
-    XUI_SERVER_NAME = os.environ.get("XUI_SERVER_NAME", "Ples VPN")
     
     # База данных
     DB_PATH = "/tmp/ples_vpn.db"
@@ -71,13 +64,15 @@ class Config:
     
     # Реферальная система
     REFERRAL_BONUS_DAYS = 3
+    REFERRAL_BONUS_PERCENT = 10  # 10% от пополнений рефералов
     
     # URL
     BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ples-vpn.onrender.com")
     WEBHOOK_PATH = "/webhook"
     
     # Настройки автоудаления
-    AUTO_DELETE_SHORT = 30
+    AUTO_DELETE_USER_MESSAGES = 60
+    AUTO_DELETE_BOT_MESSAGES = 60
     AUTO_DELETE_ORDER = 1800
     
     # Настройки пинга
@@ -217,7 +212,7 @@ class CryptoPay:
                 "currency_type": "fiat",
                 "fiat": "RUB",
                 "accepted_assets": "USDT,TON,BTC",
-                "description": f"Оплата на {amount_rub} RUB",
+                "description": f"Пополнение баланса на {amount_rub} RUB",
                 "payload": payload,
                 "expires_in": 3600,
                 "allow_comments": False,
@@ -263,118 +258,6 @@ class CryptoPay:
 
 crypto = CryptoPay(config.CRYPTOBOT_TOKEN)
 
-# ==================== 3X-UI МЕНЕДЖЕР ====================
-
-class XUIManager:
-    def __init__(self):
-        self.async_api = None
-        self._initialized = False
-    
-    async def initialize(self):
-        try:
-            logger.info("🔌 Подключение к 3x-UI...")
-            self.async_api = AsyncApi(
-                config.XUI_PANEL_URL,
-                config.XUI_USERNAME,
-                config.XUI_PASSWORD
-            )
-            await self.async_api.login()
-            logger.info("✅ Подключено к 3x-UI")
-            self._initialized = True
-            return True
-        except Exception as e:
-            logger.error(f"❌ Ошибка подключения к 3x-UI: {e}")
-            return False
-    
-    async def get_inbound(self):
-        try:
-            if not self._initialized:
-                await self.initialize()
-            return await self.async_api.inbound.get_by_id(config.XUI_INBOUND_ID)
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения inbound: {e}")
-            return None
-    
-    async def create_client(self, user_id: int, days: int) -> Tuple[bool, str, Optional[str], Optional[str]]:
-        try:
-            if not self._initialized:
-                await self.initialize()
-            
-            inbound = await self.get_inbound()
-            if not inbound:
-                return False, "❌ Ошибка конфигурации сервера", None, None
-            
-            email = f"user_{user_id}_{int(datetime.now().timestamp())}"
-            expiry_time = int((datetime.now() + timedelta(days=days)).timestamp() * 1000)
-            
-            client_data = {
-                "email": email,
-                "enable": True,
-                "expiryTime": expiry_time,
-                "totalGB": 0,
-                "limitIp": 0,
-                "flow": "xtls-rprx-vision"
-            }
-            
-            await self.async_api.client.add(
-                inbound_id=config.XUI_INBOUND_ID,
-                client_data=client_data
-            )
-            
-            await asyncio.sleep(1)
-            inbound = await self.get_inbound()
-            
-            client_uuid = None
-            for client in inbound.settings.clients:
-                if client.email == email:
-                    client_uuid = client.id
-                    break
-            
-            if not client_uuid:
-                return False, "❌ Клиент создан, но UUID не найден", None, email
-            
-            config_str = self._generate_config(inbound, client_uuid, email)
-            return True, "✅ Клиент создан", config_str, email
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка создания клиента: {e}")
-            return False, f"❌ Ошибка: {str(e)}", None, None
-    
-    def _generate_config(self, inbound, user_uuid: str, user_email: str) -> str:
-        try:
-            if hasattr(inbound, 'stream_settings') and inbound.stream_settings:
-                reality_settings = inbound.stream_settings.reality_settings
-                if reality_settings:
-                    public_key = reality_settings.get("settings", {}).get("publicKey")
-                    server_names = reality_settings.get("serverNames", [])
-                    short_ids = reality_settings.get("shortIds", [])
-                    
-                    website_name = server_names[0] if server_names else "addons.mozilla.org"
-                    short_id = short_ids[0] if short_ids else ""
-                    
-                    return (f"vless://{user_uuid}@{config.XUI_EXTERNAL_IP}:{config.XUI_SERVER_PORT}"
-                            f"?type=tcp&security=reality&pbk={public_key}&fp=chrome&sni={website_name}"
-                            f"&sid={short_id}&spx=%2F#{config.XUI_SERVER_NAME}-{user_email}")
-            
-            return (f"vless://{user_uuid}@{config.XUI_EXTERNAL_IP}:{config.XUI_SERVER_PORT}"
-                    f"?type=tcp&security=none#{config.XUI_SERVER_NAME}-{user_email}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка генерации конфига: {e}")
-            return f"Ошибка генерации конфига: {e}"
-    
-    def generate_qr_code(self, config_str: str) -> Optional[BytesIO]:
-        try:
-            img = qrcode.make(config_str, image_factory=PyPNGImage)
-            bio = BytesIO()
-            img.save(bio, 'PNG')
-            bio.seek(0)
-            return bio
-        except Exception as e:
-            logger.error(f"❌ Ошибка генерации QR: {e}")
-            return None
-
-xui_manager = XUIManager()
-
 # ==================== БАЗА ДАННЫХ ====================
 
 class Database:
@@ -391,12 +274,14 @@ class Database:
                 await db.execute("PRAGMA journal_mode = WAL")
                 await db.execute("PRAGMA foreign_keys = ON")
                 
+                # 👤 Таблица пользователей с балансом
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS users (
                         user_id INTEGER PRIMARY KEY,
                         username TEXT,
                         first_name TEXT,
                         subscribe_until TEXT,
+                        balance INTEGER DEFAULT 0,
                         trial_used INTEGER DEFAULT 0,
                         banned INTEGER DEFAULT 0,
                         role TEXT DEFAULT 'user',
@@ -405,14 +290,15 @@ class Database:
                         referred_by INTEGER,
                         referral_code TEXT UNIQUE,
                         referral_count INTEGER DEFAULT 0,
+                        referral_earnings INTEGER DEFAULT 0,
                         last_active TEXT,
                         last_message_id INTEGER,
-                        vpn_email TEXT,
-                        vpn_config TEXT,
+                        profile_photo TEXT,
                         reg_date TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
                 
+                # 👥 Таблица рефералов
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS referrals (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -425,12 +311,12 @@ class Database:
                     )
                 ''')
                 
+                # 💳 Таблица платежей
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS crypto_payments (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER,
                         invoice_id INTEGER UNIQUE,
-                        plan_id TEXT,
                         amount_rub INTEGER,
                         status TEXT DEFAULT 'pending',
                         payload TEXT,
@@ -440,6 +326,20 @@ class Database:
                     )
                 ''')
                 
+                # 📊 Таблица транзакций баланса
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS balance_transactions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        amount INTEGER,
+                        type TEXT,
+                        description TEXT,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                    )
+                ''')
+                
+                # 📊 Таблица контента
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS content (
                         key TEXT PRIMARY KEY,
@@ -448,6 +348,7 @@ class Database:
                     )
                 ''')
                 
+                # 💰 Таблица тарифов
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS plans (
                         id TEXT PRIMARY KEY,
@@ -463,6 +364,7 @@ class Database:
                     )
                 ''')
                 
+                # 🏷️ Таблица типов услуг
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS service_types (
                         id TEXT PRIMARY KEY,
@@ -475,18 +377,48 @@ class Database:
                     )
                 ''')
                 
+                # 📋 Таблица фото для меню
                 await db.execute('''
-                    CREATE TABLE IF NOT EXISTS servers (
-                        id TEXT PRIMARY KEY,
-                        name TEXT,
-                        flag TEXT,
-                        city TEXT,
-                        load INTEGER DEFAULT 0,
-                        ping INTEGER DEFAULT 0,
-                        enabled INTEGER DEFAULT 1
+                    CREATE TABLE IF NOT EXISTS menu_photos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        menu_key TEXT UNIQUE,
+                        photo_id TEXT,
+                        description TEXT,
+                        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
                 
+                # 📋 Таблица тикетов
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS tickets (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        username TEXT,
+                        first_name TEXT,
+                        subject TEXT,
+                        message TEXT,
+                        status TEXT DEFAULT 'open',
+                        admin_id INTEGER,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        closed_at TEXT,
+                        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                    )
+                ''')
+                
+                # 📋 Таблица ответов на тикеты
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS ticket_replies (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ticket_id INTEGER,
+                        user_id INTEGER,
+                        message TEXT,
+                        is_admin BOOLEAN DEFAULT 0,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+                    )
+                ''')
+                
+                # 📋 Таблица логов
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS maintenance_log (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -508,6 +440,7 @@ class Database:
     
     async def _init_default_data(self, db):
         try:
+            # Добавляем типы услуг
             services = [
                 ("vpn", "VPN", "🌍", "Быстрый и безопасный VPN", "🛡️", 1, 1),
                 ("proxy_tg", "Прокси для Telegram", "📱", "Обход блокировок Telegram", "🔌", 1, 2),
@@ -521,6 +454,7 @@ class Database:
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', s)
             
+            # Добавляем тарифы
             plans = [
                 ("vpn_1month", "🌱 1 месяц", 30, 299, "🌱", 1, "Базовый тариф", None, "vpn"),
                 ("vpn_3month", "🌿 3 месяца", 90, 699, "🌿", 1, "Популярный тариф", None, "vpn"),
@@ -534,23 +468,24 @@ class Database:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', p)
             
-            servers = [
-                ("netherlands", "🇳🇱 Нидерланды", "🇳🇱", "Амстердам", 32, 45, 1),
-                ("usa", "🇺🇸 США", "🇺🇸", "Нью-Йорк", 45, 120, 1),
-                ("germany", "🇩🇪 Германия", "🇩🇪", "Франкфурт", 28, 55, 1),
-                ("uk", "🇬🇧 Великобритания", "🇬🇧", "Лондон", 38, 65, 1),
-                ("singapore", "🇸🇬 Сингапур", "🇸🇬", "Сингапур", 22, 150, 1),
-                ("japan", "🇯🇵 Япония", "🇯🇵", "Токио", 19, 180, 1)
-            ]
-            
-            for s in servers:
-                await db.execute('''
-                    INSERT OR IGNORE INTO servers (id, name, flag, city, load, ping, enabled)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', s)
-            
+            # Добавляем приветственный текст
             welcome = ("welcome_text", "🌟 <b>Ples VPN</b>\n\nВыберите услугу:")
             await db.execute('INSERT OR IGNORE INTO content (key, value) VALUES (?, ?)', welcome)
+            
+            # Добавляем начальные фото для меню
+            menu_items = [
+                ("main_menu", None, "Главное меню"),
+                ("profile", None, "Профиль"),
+                ("services", None, "Услуги"),
+                ("support", None, "Поддержка")
+            ]
+            
+            for key, photo, desc in menu_items:
+                await db.execute('''
+                    INSERT OR IGNORE INTO menu_photos (menu_key, photo_id, description) 
+                    VALUES (?, ?, ?)
+                ''', (key, photo, desc))
+            
             await db.commit()
             
         except Exception as e:
@@ -653,8 +588,8 @@ class UserManager:
         
         await db.execute(
             """INSERT INTO users 
-               (user_id, username, first_name, referred_by, referral_code, last_active, role) 
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (user_id, username, first_name, referred_by, referral_code, last_active, role, balance) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
             (user_id, username, first_name, referred_by, referral_code, datetime.now().isoformat(), role)
         )
         
@@ -675,10 +610,10 @@ class UserManager:
         await db.execute("UPDATE users SET last_message_id = ? WHERE user_id = ?", (message_id, user_id))
     
     @staticmethod
-    async def save_vpn_info(user_id: int, vpn_email: str, vpn_config: str):
+    async def save_profile_photo(user_id: int, photo_id: str):
         await db.execute(
-            "UPDATE users SET vpn_email = ?, vpn_config = ? WHERE user_id = ?",
-            (vpn_email, vpn_config, user_id)
+            "UPDATE users SET profile_photo = ? WHERE user_id = ?",
+            (photo_id, user_id)
         )
     
     @staticmethod
@@ -695,6 +630,64 @@ class UserManager:
             (trial_end.isoformat(), user_id)
         )
         return True, f"✅ Пробный период {config.TRIAL_DAYS} дней активирован!\n📅 Действует до: {trial_end.strftime('%d.%m.%Y')}"
+    
+    @staticmethod
+    async def get_balance(user_id: int) -> int:
+        """Получить баланс пользователя"""
+        user = await UserManager.get(user_id)
+        return user.get("balance", 0) if user else 0
+    
+    @staticmethod
+    async def add_balance(user_id: int, amount: int, description: str = "Пополнение баланса"):
+        """Добавить средства на баланс"""
+        await db.execute(
+            "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+            (amount, user_id)
+        )
+        await db.execute(
+            "INSERT INTO balance_transactions (user_id, amount, type, description) VALUES (?, ?, 'deposit', ?)",
+            (user_id, amount, description)
+        )
+        
+        # Начисляем бонус рефереру
+        user = await UserManager.get(user_id)
+        if user and user.get("referred_by"):
+            referrer_id = user["referred_by"]
+            bonus = int(amount * config.REFERRAL_BONUS_PERCENT / 100)
+            if bonus > 0:
+                await UserManager.add_balance(referrer_id, bonus, f"Реферальный бонус от пользователя {user_id}")
+                await db.execute(
+                    "UPDATE users SET referral_earnings = referral_earnings + ? WHERE user_id = ?",
+                    (bonus, referrer_id)
+                )
+        
+        logger.info(f"💰 Баланс пользователя {user_id} пополнен на {amount} RUB")
+        return True
+    
+    @staticmethod
+    async def spend_balance(user_id: int, amount: int, description: str) -> bool:
+        """Списать средства с баланса"""
+        balance = await UserManager.get_balance(user_id)
+        if balance < amount:
+            return False
+        
+        await db.execute(
+            "UPDATE users SET balance = balance - ? WHERE user_id = ?",
+            (amount, user_id)
+        )
+        await db.execute(
+            "INSERT INTO balance_transactions (user_id, amount, type, description) VALUES (?, ?, 'spend', ?)",
+            (user_id, -amount, description)
+        )
+        return True
+    
+    @staticmethod
+    async def get_transactions(user_id: int, limit: int = 10) -> List[Dict]:
+        """Получить историю транзакций"""
+        return await db.fetch_all(
+            "SELECT * FROM balance_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit)
+        )
     
     @staticmethod
     async def give_subscription(user_id: int, days: int, admin_give: bool = False):
@@ -718,6 +711,20 @@ class UserManager:
         return new
     
     @staticmethod
+    async def buy_subscription(user_id: int, plan_id: str, plan_price: int, plan_days: int) -> Tuple[bool, str]:
+        """Покупка подписки за баланс"""
+        balance = await UserManager.get_balance(user_id)
+        if balance < plan_price:
+            return False, f"❌ Недостаточно средств. Нужно: {plan_price}₽, у вас: {balance}₽"
+        
+        success = await UserManager.spend_balance(user_id, plan_price, f"Покупка подписки {plan_id}")
+        if not success:
+            return False, "❌ Ошибка списания средств"
+        
+        new_date = await UserManager.give_subscription(user_id, plan_days)
+        return True, f"✅ Подписка активирована до {new_date.strftime('%d.%m.%Y')}"
+    
+    @staticmethod
     async def ban_user(user_id: int):
         await db.execute("UPDATE users SET banned = 1 WHERE user_id = ?", (user_id,))
     
@@ -730,6 +737,7 @@ class UserManager:
         users = await UserManager.get_all_users()
         total = len(users)
         active = banned = trial = testers = admins = 0
+        total_balance = 0
         
         for u in users:
             if u.get("role") == "admin":
@@ -746,18 +754,20 @@ class UserManager:
                         active += 1
                 except:
                     pass
+            total_balance += u.get("balance", 0)
         
         return {
             "total": total, "active": active, "banned": banned,
             "trial": trial, "testers": testers, "admins": admins,
+            "total_balance": total_balance,
             "conversion": round(active / total * 100, 1) if total else 0
         }
     
     @staticmethod
-    async def save_crypto_payment(user_id: int, invoice_id: int, plan_id: str, amount_rub: int, payload: str):
+    async def save_crypto_payment(user_id: int, invoice_id: int, amount_rub: int, payload: str):
         await db.execute(
-            "INSERT INTO crypto_payments (user_id, invoice_id, plan_id, amount_rub, payload) VALUES (?, ?, ?, ?, ?)",
-            (user_id, invoice_id, plan_id, amount_rub, payload)
+            "INSERT INTO crypto_payments (user_id, invoice_id, amount_rub, payload) VALUES (?, ?, ?, ?)",
+            (user_id, invoice_id, amount_rub, payload)
         )
     
     @staticmethod
@@ -779,6 +789,49 @@ class UserManager:
             "INSERT INTO maintenance_log (action, admin_id) VALUES (?, ?)",
             (action, admin_id)
         )
+    
+    @staticmethod
+    async def create_ticket(user_id: int, subject: str, message: str) -> int:
+        """Создание нового тикета"""
+        user = await UserManager.get(user_id)
+        await db.execute(
+            """INSERT INTO tickets 
+               (user_id, username, first_name, subject, message) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (user_id, user.get('username'), user.get('first_name'), subject, message)
+        )
+        async with aiosqlite.connect(config.DB_PATH) as conn:
+            cursor = await conn.execute("SELECT last_insert_rowid()")
+            row = await cursor.fetchone()
+            return row[0] if row else None
+    
+    @staticmethod
+    async def close_ticket(ticket_id: int, admin_id: int):
+        """Закрыть тикет"""
+        await db.execute(
+            "UPDATE tickets SET status = 'closed', admin_id = ?, closed_at = ? WHERE id = ?",
+            (admin_id, datetime.now().isoformat(), ticket_id)
+        )
+    
+    @staticmethod
+    async def add_ticket_reply(ticket_id: int, user_id: int, message: str, is_admin: bool = False):
+        """Добавить ответ в тикет"""
+        await db.execute(
+            "INSERT INTO ticket_replies (ticket_id, user_id, message, is_admin) VALUES (?, ?, ?, ?)",
+            (ticket_id, user_id, message, 1 if is_admin else 0)
+        )
+    
+    @staticmethod
+    async def give_service_subscription(user_id: int, service_type: str, admin_give: bool = False):
+        """Выдача подписки на конкретную услугу"""
+        days_map = {
+            "vpn": 30,
+            "proxy": 30,
+            "antijammer": 30,
+            "website": 30
+        }
+        days = days_map.get(service_type, 30)
+        return await UserManager.give_subscription(user_id, days, admin_give)
 
 # ==================== МЕНЕДЖЕР КОНТЕНТА ====================
 
@@ -795,6 +848,23 @@ class ContentManager:
             ("welcome_text", text, datetime.now().isoformat())
         )
         return True
+    
+    @staticmethod
+    async def get_menu_photo(menu_key: str) -> Optional[str]:
+        photo = await db.fetch_one("SELECT photo_id FROM menu_photos WHERE menu_key = ?", (menu_key,))
+        return photo["photo_id"] if photo else None
+    
+    @staticmethod
+    async def update_menu_photo(menu_key: str, photo_id: str):
+        await db.execute(
+            "UPDATE menu_photos SET photo_id = ?, updated_at = ? WHERE menu_key = ?",
+            (photo_id, datetime.now().isoformat(), menu_key)
+        )
+        return True
+    
+    @staticmethod
+    async def get_all_menu_photos() -> List[Dict]:
+        return await db.fetch_all("SELECT * FROM menu_photos ORDER BY id")
     
     @staticmethod
     async def get_service_types() -> Dict:
@@ -857,14 +927,6 @@ class ContentManager:
             (photo_id, datetime.now().isoformat(), plan_id)
         )
         return True
-    
-    @staticmethod
-    async def get_servers() -> Dict:
-        servers = await db.fetch_all("SELECT * FROM servers WHERE enabled = 1 ORDER BY id")
-        return {s["id"]: {
-            "name": s["name"], "flag": s["flag"], "city": s["city"],
-            "load": s["load"], "ping": s["ping"]
-        } for s in servers}
 
 # ==================== ДАННЫЕ ====================
 
@@ -876,24 +938,41 @@ PLANS = {
     "12month": {"name": "🏝️ 12 месяцев", "days": 365, "price": 1999}
 }
 
-# ==================== ФУНКЦИИ ДЛЯ АВТОУДАЛЕНИЯ ====================
+# ==================== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ====================
 
 async def schedule_message_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int):
+    """Запланировать удаление сообщения бота через указанное время"""
     try:
         await asyncio.sleep(delay)
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except:
-        pass
+        logger.info(f"🗑️ Автоудаление: сообщение {message_id} удалено через {delay} сек")
+    except Exception as e:
+        logger.debug(f"Не удалось автоудалить сообщение {message_id}: {e}")
+
+async def delete_user_message_later(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    """Удаление сообщения пользователя через заданное время"""
+    try:
+        await asyncio.sleep(config.AUTO_DELETE_USER_MESSAGES)
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info(f"🗑️ Автоудаление пользователя: сообщение {message_id} удалено через {config.AUTO_DELETE_USER_MESSAGES} сек")
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение пользователя {message_id}: {e}")
 
 async def delete_previous_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """Принудительное удаление предыдущего сообщения бота"""
     try:
         user = await UserManager.get(chat_id)
         if user and user.get("last_message_id"):
-            await context.bot.delete_message(chat_id=chat_id, message_id=user["last_message_id"])
-    except:
-        pass
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=user["last_message_id"])
+                logger.info(f"🗑️ Мгновенно удалено предыдущее сообщение бота {user['last_message_id']}")
+            except Exception as e:
+                logger.debug(f"Не удалось удалить предыдущее сообщение бота: {e}")
+    except Exception as e:
+        logger.debug(f"Ошибка при удалении предыдущего сообщения: {e}")
 
 async def send_new_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, keyboard=None, photo=None, auto_delete: bool = True):
+    """Отправить новое сообщение, удалив предыдущее"""
     try:
         await delete_previous_message(context, chat_id)
         
@@ -916,7 +995,7 @@ async def send_new_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, tex
         await UserManager.save_message_id(chat_id, msg.message_id)
         
         if auto_delete:
-            delay = config.AUTO_DELETE_ORDER if "Оплата" in text else config.AUTO_DELETE_SHORT
+            delay = config.AUTO_DELETE_ORDER if "Оплата" in text else config.AUTO_DELETE_BOT_MESSAGES
             asyncio.create_task(schedule_message_deletion(context, chat_id, msg.message_id, delay))
         
         return msg
@@ -965,7 +1044,7 @@ async def is_bot_enabled(user_id: int) -> bool:
         return False
     return config.BOT_ENABLED
 
-# ==================== КЛАВИАТУРЫ (ДВУХКОЛОНОЧНЫЕ) ====================
+# ==================== КЛАВИАТУРЫ ====================
 
 class KeyboardBuilder:
     @staticmethod
@@ -973,19 +1052,16 @@ class KeyboardBuilder:
         """Главное меню в 2 колонки"""
         services = await ContentManager.get_service_types()
         
-        # Создаем кнопки в две колонки
         service_buttons = []
         service_list = list(services.items())
         
         for i in range(0, len(service_list), 2):
             row = []
-            # Первая кнопка
             sid, service = service_list[i]
             row.append(InlineKeyboardButton(
                 f"{service['icon']} {service['emoji']} {service['name']}",
                 callback_data=f"service_{sid}"
             ))
-            # Вторая кнопка (если есть)
             if i + 1 < len(service_list):
                 sid2, service2 = service_list[i + 1]
                 row.append(InlineKeyboardButton(
@@ -994,7 +1070,6 @@ class KeyboardBuilder:
                 ))
             service_buttons.append(row)
         
-        # Основные кнопки в две колонки
         main_buttons = [
             [
                 InlineKeyboardButton("👤 ПРОФИЛЬ", callback_data="profile"),
@@ -1005,7 +1080,6 @@ class KeyboardBuilder:
             ]
         ]
         
-        # Кнопка админ/тестер панели (на всю ширину)
         if role == "admin":
             admin_buttons = [
                 [InlineKeyboardButton("⚙️ АДМИН ПАНЕЛЬ", callback_data="admin_menu")]
@@ -1017,13 +1091,11 @@ class KeyboardBuilder:
         else:
             admin_buttons = []
         
-        # Собираем все вместе
         all_buttons = service_buttons + main_buttons + admin_buttons
         return InlineKeyboardMarkup(all_buttons)
     
     @staticmethod
     async def service_plans(service_type: str):
-        """Планы для услуги в 2 колонки"""
         plans = await ContentManager.get_plans_by_service(service_type)
         
         buttons = []
@@ -1050,103 +1122,70 @@ class KeyboardBuilder:
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
-    async def servers():
-        """Серверы в 2 колонки"""
-        servers = await ContentManager.get_servers()
-        
-        buttons = []
-        server_list = list(servers.items())
-        
-        for i in range(0, len(server_list), 2):
-            row = []
-            sid, server = server_list[i]
-            load = "🟢" if server["load"] < 30 else "🟡" if server["load"] < 60 else "🔴"
-            row.append(InlineKeyboardButton(
-                f"{server['flag']} {server['name']} • {load} {server['load']}% • {server['ping']}ms",
-                callback_data=f"server_{sid}"
-            ))
-            if i + 1 < len(server_list):
-                sid2, server2 = server_list[i + 1]
-                load2 = "🟢" if server2["load"] < 30 else "🟡" if server2["load"] < 60 else "🔴"
-                row.append(InlineKeyboardButton(
-                    f"{server2['flag']} {server2['name']} • {load2} {server2['load']}% • {server2['ping']}ms",
-                    callback_data=f"server_{sid2}"
-                ))
-            buttons.append(row)
-        
-        buttons.append([InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")])
-        return InlineKeyboardMarkup(buttons)
+    def balance_menu():
+        """Меню баланса"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 ПОПОЛНИТЬ БАЛАНС", callback_data="deposit")],
+            [InlineKeyboardButton("📊 ИСТОРИЯ", callback_data="balance_history")],
+            [InlineKeyboardButton("◀️ НАЗАД", callback_data="profile")]
+        ])
     
     @staticmethod
-    def protocols():
-        """Протоколы в 2 колонки"""
-        protocols = PROTOCOLS
-        buttons = []
-        
-        for i in range(0, len(protocols), 2):
-            row = []
-            row.append(InlineKeyboardButton(f"🔒 {protocols[i]}", callback_data=f"protocol_{protocols[i]}"))
-            if i + 1 < len(protocols):
-                row.append(InlineKeyboardButton(f"🔒 {protocols[i + 1]}", callback_data=f"protocol_{protocols[i + 1]}"))
-            buttons.append(row)
-        
-        buttons.append([InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")])
-        return InlineKeyboardMarkup(buttons)
-    
-    @staticmethod
-    def devices():
-        """Устройства в 2 колонки"""
+    def deposit_amounts():
+        """Суммы для пополнения"""
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("📱 ANDROID", callback_data="device_android"),
-                InlineKeyboardButton("🍏 IOS", callback_data="device_ios")
+                InlineKeyboardButton("100 ₽", callback_data="deposit_100"),
+                InlineKeyboardButton("300 ₽", callback_data="deposit_300")
             ],
             [
-                InlineKeyboardButton("💻 WINDOWS", callback_data="device_windows"),
-                InlineKeyboardButton("🍎 MACOS", callback_data="device_macos")
+                InlineKeyboardButton("500 ₽", callback_data="deposit_500"),
+                InlineKeyboardButton("1000 ₽", callback_data="deposit_1000")
             ],
             [
-                InlineKeyboardButton("🐧 LINUX", callback_data="device_linux")
+                InlineKeyboardButton("2000 ₽", callback_data="deposit_2000"),
+                InlineKeyboardButton("5000 ₽", callback_data="deposit_5000")
             ],
+            [InlineKeyboardButton("◀️ НАЗАД", callback_data="balance_menu")]
+        ])
+    
+    @staticmethod
+    def support_menu():
+        """Меню поддержки"""
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔧 ПРОБЛЕМА С ПОДКЛЮЧЕНИЕМ", callback_data="ticket_connection")],
+            [InlineKeyboardButton("💰 ВОПРОС ПО ОПЛАТЕ", callback_data="ticket_payment")],
+            [InlineKeyboardButton("❓ ОБЩИЙ ВОПРОС", callback_data="ticket_other")],
             [InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")]
         ])
     
     @staticmethod
-    def subscription():
-        """Управление подпиской в 2 колонки"""
+    def ticket_admin_actions(ticket_id: int, user_id: int):
+        """Кнопки для админов в группе"""
         return InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🔄 ПРОДЛИТЬ", callback_data="get_access"),
-                InlineKeyboardButton("📥 КОНФИГ", callback_data="download_config")
+                InlineKeyboardButton("✅ ОТВЕТИТЬ", callback_data=f"ticket_reply_{ticket_id}_{user_id}"),
+                InlineKeyboardButton("🔒 ЗАБАНИТЬ", callback_data=f"ticket_ban_{user_id}")
             ],
             [
-                InlineKeyboardButton("🌍 СМЕНИТЬ СЕРВЕР", callback_data="select_server"),
-                InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")
-            ],
-            [InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")]
+                InlineKeyboardButton("❌ ОТКЛОНИТЬ", callback_data=f"ticket_close_{ticket_id}"),
+                InlineKeyboardButton("🎁 ВЫДАТЬ ПОДПИСКУ", callback_data=f"ticket_give_{user_id}")
+            ]
         ])
     
     @staticmethod
-    def referrals(referral_code: str):
-        """Реферальная система"""
-        ref_link = f"https://t.me/{config.BOT_USERNAME}?start=ref_{referral_code}"
+    def ticket_give_menu(user_id: int):
+        """Меню выдачи подписки для админов"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 РЕФЕРАЛЬНАЯ ССЫЛКА", url=ref_link)],
-            [InlineKeyboardButton("📊 СТАТИСТИКА", callback_data="referral_stats")],
-            [InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")]
-        ])
-    
-    @staticmethod
-    def payment(plan_name: str, plan_price: int, invoice_url: str, invoice_id: int):
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("💳 ОПЛАТИТЬ КРИПТОВАЛЮТОЙ", url=invoice_url)],
-            [InlineKeyboardButton("✅ Я ОПЛАТИЛ", callback_data=f"check_crypto_{invoice_id}")],
-            [InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")]
+            [InlineKeyboardButton("🌍 VPN", callback_data=f"ticket_give_vpn_{user_id}")],
+            [InlineKeyboardButton("📱 ПРОКСИ TG", callback_data=f"ticket_give_proxy_{user_id}")],
+            [InlineKeyboardButton("📡 АНТИГЛУШИЛКИ", callback_data=f"ticket_give_antijammer_{user_id}")],
+            [InlineKeyboardButton("🌐 ДЛЯ САЙТОВ", callback_data=f"ticket_give_website_{user_id}")],
+            [InlineKeyboardButton("❌ ОТМЕНА", callback_data=f"ticket_cancel_{user_id}")]
         ])
     
     @staticmethod
     def admin_panel():
-        """Админ панель в 2 колонки"""
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("👥 ПОЛЬЗОВАТЕЛИ", callback_data="admin_users"),
@@ -1164,12 +1203,14 @@ class KeyboardBuilder:
                 InlineKeyboardButton("🧪 ТЕСТЕРЫ", callback_data="admin_testers"),
                 InlineKeyboardButton("⚡ УПРАВЛЕНИЕ", callback_data="admin_bot_control")
             ],
+            [
+                InlineKeyboardButton("🖼️ ФОТО МЕНЮ", callback_data="admin_menu_photos")
+            ],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="back_main")]
         ])
     
     @staticmethod
     def bot_control():
-        """Управление ботом в 2 колонки"""
         status = "🟢 ВКЛЮЧЕН" if config.BOT_ENABLED and not config.MAINTENANCE_MODE else "🔴 ВЫКЛЮЧЕН"
         maintenance_status = "🔧 ВКЛЮЧЕН" if config.MAINTENANCE_MODE else "✅ ВЫКЛЮЧЕН"
         
@@ -1189,7 +1230,6 @@ class KeyboardBuilder:
     
     @staticmethod
     def tester_panel():
-        """Тестер панель в 2 колонки"""
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("📊 СТАТИСТИКА", callback_data="tester_stats"),
@@ -1207,7 +1247,6 @@ class KeyboardBuilder:
     
     @staticmethod
     def admin_testers():
-        """Управление тестерами в 2 колонки"""
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("👥 СПИСОК", callback_data="admin_tester_list"),
@@ -1222,7 +1261,6 @@ class KeyboardBuilder:
     
     @staticmethod
     async def admin_services():
-        """Управление услугами в 2 колонки"""
         services = await ContentManager.get_service_types()
         
         buttons = []
@@ -1276,7 +1314,6 @@ class KeyboardBuilder:
     
     @staticmethod
     async def admin_plans():
-        """Управление тарифами в 2 колонки"""
         services = await ContentManager.get_service_types()
         
         buttons = []
@@ -1349,7 +1386,8 @@ class KeyboardBuilder:
             role_emoji = {"admin": "👑", "tester": "🧪", "user": "👤"}.get(user.get('role'), "👤")
             status = "🔴" if user.get('banned') else "🟢"
             sub = "✅" if user.get('subscribe_until') and datetime.fromisoformat(user['subscribe_until']) > datetime.now() else "❌"
-            btn_text = f"{role_emoji}{status}{sub} {name}"
+            balance = user.get('balance', 0)
+            btn_text = f"{role_emoji}{status}{sub} {name} | {balance}₽"
             
             current_row.append(InlineKeyboardButton(btn_text, callback_data=f"admin_user_{user['user_id']}"))
             
@@ -1357,7 +1395,6 @@ class KeyboardBuilder:
                 rows.append(current_row)
                 current_row = []
         
-        # Навигация
         nav_row = []
         if page > 0:
             nav_row.append(InlineKeyboardButton("◀️", callback_data=f"admin_users_page_{page-1}"))
@@ -1382,7 +1419,8 @@ class KeyboardBuilder:
             name = user.get('first_name', '—')[:8]
             status = "🟢" if not user.get('banned') else "🔴"
             sub = "✅" if user.get('subscribe_until') and datetime.fromisoformat(user['subscribe_until']) > datetime.now() else "❌"
-            btn_text = f"{status}{sub} {name}"
+            balance = user.get('balance', 0)
+            btn_text = f"{status}{sub} {name} | {balance}₽"
             
             current_row.append(InlineKeyboardButton(btn_text, callback_data=f"tester_view_user_{user['user_id']}"))
             
@@ -1390,7 +1428,6 @@ class KeyboardBuilder:
                 rows.append(current_row)
                 current_row = []
         
-        # Навигация
         nav_row = []
         if page > 0:
             nav_row.append(InlineKeyboardButton("◀️", callback_data=f"tester_users_page_{page-1}"))
@@ -1405,6 +1442,7 @@ class KeyboardBuilder:
     @staticmethod
     def admin_user_actions(user_id: int, is_banned: bool):
         return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 ВЫДАТЬ БОНУС", callback_data=f"admin_give_bonus_{user_id}")],
             [InlineKeyboardButton("📅 ВЫДАТЬ ПОДПИСКУ", callback_data=f"admin_give_{user_id}")],
             [InlineKeyboardButton("🔒 ЗАБАНИТЬ" if not is_banned else "🔓 РАЗБАНИТЬ",
                                  callback_data=f"admin_ban_{user_id}" if not is_banned else f"admin_unban_{user_id}")],
@@ -1445,7 +1483,6 @@ startup_time = time.time()
 # ==================== ФУНКЦИЯ РАССЫЛКИ УВЕДОМЛЕНИЙ ====================
 
 async def notify_maintenance(context: ContextTypes.DEFAULT_TYPE, message: str):
-    """Отправляет уведомление о техработах всем пользователям"""
     users = await UserManager.get_all_users()
     total = len(users)
     sent = 0
@@ -1482,24 +1519,17 @@ async def check_pending_payments():
             for payment in pending:
                 if await crypto.check_payment(payment["invoice_id"]):
                     user_id = payment["user_id"]
-                    plan_id = payment["plan_id"]
-                    plans = await ContentManager.get_all_plans()
-                    plan = plans.get(plan_id, list(plans.values())[0])
+                    amount = payment["amount_rub"]
                     
-                    ok, msg, config_str, email = await xui_manager.create_client(user_id, plan["days"])
-                    if ok:
-                        await UserManager.save_vpn_info(user_id, email, config_str)
-                        new_date = await UserManager.give_subscription(user_id, plan["days"])
-                        await UserManager.confirm_crypto_payment(payment["invoice_id"])
-                        
-                        await telegram_app.bot.send_message(
-                            chat_id=user_id,
-                            text=f"✅ <b>Оплата подтверждена!</b>\n\nУслуга {plan['name']} активирована!\n📅 До: {new_date.strftime('%d.%m.%Y')}\n\n🔗 <b>Ваш конфиг:</b>\n<code>{config_str}</code>",
-                            parse_mode=ParseMode.HTML
-                        )
-                        qr = xui_manager.generate_qr_code(config_str)
-                        if qr:
-                            await telegram_app.bot.send_photo(chat_id=user_id, photo=qr)
+                    # Начисляем баланс
+                    await UserManager.add_balance(user_id, amount, f"Пополнение через CryptoBot")
+                    await UserManager.confirm_crypto_payment(payment["invoice_id"])
+                    
+                    await telegram_app.bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ <b>Пополнение подтверждено!</b>\n\n💰 Баланс пополнен на {amount}₽",
+                        parse_mode=ParseMode.HTML
+                    )
         except Exception as e:
             logger.error(f"Ошибка проверки платежей: {e}")
             await asyncio.sleep(60)
@@ -1511,10 +1541,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         args = context.args
         user_id = user.id
+        chat_id = update.effective_chat.id
+        
+        # Автоудаление сообщения пользователя
+        asyncio.create_task(delete_user_message_later(context, chat_id, update.message.message_id))
         
         # Проверяем статус бота
         if not await is_bot_enabled(user_id):
-            await update.message.reply_text(config.MAINTENANCE_MESSAGE, parse_mode=ParseMode.HTML)
+            msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=config.MAINTENANCE_MESSAGE,
+                parse_mode=ParseMode.HTML
+            )
+            asyncio.create_task(schedule_message_deletion(context, chat_id, msg.message_id, config.AUTO_DELETE_BOT_MESSAGES))
             return
         
         referred_by = None
@@ -1533,7 +1572,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         role = await UserManager.get_role(user.id)
-        await send_new_message(context, user.id, await ContentManager.get_welcome_text(), await KeyboardBuilder.main(role))
+        
+        # Получаем фото для главного меню
+        menu_photo = await ContentManager.get_menu_photo("main_menu")
+        
+        if menu_photo:
+            await send_new_message(
+                context, 
+                user.id, 
+                await ContentManager.get_welcome_text(), 
+                await KeyboardBuilder.main(role),
+                photo=menu_photo
+            )
+        else:
+            await send_new_message(
+                context, 
+                user.id, 
+                await ContentManager.get_welcome_text(), 
+                await KeyboardBuilder.main(role)
+            )
+        
     except Exception as e:
         logger.error(f"Ошибка start: {e}")
 
@@ -1544,11 +1602,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         data = query.data
         user_id = query.from_user.id
+        chat_id = query.message.chat_id
         
         # Проверяем статус бота (кроме админских кнопок)
         if not data.startswith("admin_") and not data.startswith("back_main"):
             if not await is_bot_enabled(user_id):
-                await send_new_message(context, user_id, config.MAINTENANCE_MESSAGE, None)
+                await query.answer("🔧 Бот временно недоступен", show_alert=True)
                 return
         
         role = await UserManager.get_role(user_id)
@@ -1559,65 +1618,138 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # ===== НАВИГАЦИЯ =====
         if data == "back_main":
-            await send_new_message(context, user_id, "🏠 Главное меню", await KeyboardBuilder.main(role))
+            menu_photo = await ContentManager.get_menu_photo("main_menu")
+            if menu_photo:
+                await send_new_message(
+                    context, 
+                    user_id, 
+                    "🏠 Главное меню", 
+                    await KeyboardBuilder.main(role),
+                    photo=menu_photo
+                )
+            else:
+                await send_new_message(
+                    context, 
+                    user_id, 
+                    "🏠 Главное меню", 
+                    await KeyboardBuilder.main(role)
+                )
         
         # ===== УСЛУГИ =====
         elif data.startswith("service_"):
             service_id = data.replace("service_", "")
             services = await ContentManager.get_service_types()
             service = services.get(service_id, {"name": "Услуга", "description": "", "icon": "🔹", "emoji": "📌"})
+            
+            service_photo = await ContentManager.get_menu_photo("services")
             text = f"{service.get('icon', '🔹')} {service.get('emoji', '📌')} <b>{service['name']}</b>\n\n{service.get('description', '')}\n\nВыберите тариф:"
-            await send_new_message(context, user_id, text, await KeyboardBuilder.service_plans(service_id))
+            
+            if service_photo:
+                await send_new_message(
+                    context, 
+                    user_id, 
+                    text, 
+                    await KeyboardBuilder.service_plans(service_id),
+                    photo=service_photo
+                )
+            else:
+                await send_new_message(
+                    context, 
+                    user_id, 
+                    text, 
+                    await KeyboardBuilder.service_plans(service_id)
+                )
         
         # ===== ПРОБНЫЙ ПЕРИОД =====
         elif data == "trial":
             ok, msg = await UserManager.activate_trial(user_id)
             await send_new_message(context, user_id, msg, await KeyboardBuilder.main(role))
         
-        # ===== ПОКУПКА =====
+        # ===== ПОКУПКА ЗА БАЛАНС =====
         elif data.startswith("buy_"):
             plan_id = data.replace("buy_", "")
             plans = await ContentManager.get_all_plans()
             if plan_id in plans:
                 plan = plans[plan_id]
-                payload = json.dumps({"user_id": user_id, "plan_id": plan_id, "timestamp": datetime.now().timestamp()})
-                invoice = await crypto.create_invoice(plan["price"], payload)
-                if invoice:
-                    await UserManager.save_crypto_payment(user_id, invoice["invoice_id"], plan_id, plan["price"], payload)
-                    text = f"💎 <b>Оплата {plan['name']}</b>\n\n💰 Сумма: {plan['price']}₽\n⏱ Счет действителен 1 час"
-                    await send_new_message(context, user_id, text,
-                        KeyboardBuilder.payment(plan['name'], plan['price'], invoice["bot_invoice_url"], invoice["invoice_id"]))
-                else:
-                    await send_new_message(context, user_id, "❌ Ошибка создания чека", await KeyboardBuilder.main(role))
+                
+                # Проверяем баланс
+                balance = await UserManager.get_balance(user_id)
+                if balance < plan["price"]:
+                    await send_new_message(
+                        context, 
+                        user_id, 
+                        f"❌ Недостаточно средств!\n\n💰 Ваш баланс: {balance}₽\n💵 Нужно: {plan['price']}₽",
+                        KeyboardBuilder.balance_menu()
+                    )
+                    return
+                
+                # Покупаем
+                success, msg = await UserManager.buy_subscription(user_id, plan_id, plan["price"], plan["days"])
+                await send_new_message(context, user_id, msg, await KeyboardBuilder.main(role))
             else:
                 await send_new_message(context, user_id, "❌ Тариф не найден", await KeyboardBuilder.main(role))
         
-        # ===== ПРОВЕРКА ОПЛАТЫ =====
-        elif data.startswith("check_crypto_"):
-            invoice_id = int(data.replace("check_crypto_", ""))
+        # ===== БАЛАНС =====
+        elif data == "balance_menu":
+            balance = await UserManager.get_balance(user_id)
+            text = f"💰 <b>ВАШ БАЛАНС</b>\n\n{balance}₽"
+            await send_new_message(context, user_id, text, KeyboardBuilder.balance_menu())
+        
+        elif data == "deposit":
+            await send_new_message(context, user_id, "💰 Выберите сумму пополнения:", KeyboardBuilder.deposit_amounts())
+        
+        elif data.startswith("deposit_"):
+            amount = int(data.replace("deposit_", ""))
+            
+            payload = json.dumps({"user_id": user_id, "type": "deposit", "amount": amount})
+            invoice = await crypto.create_invoice(amount, payload)
+            
+            if invoice:
+                await UserManager.save_crypto_payment(user_id, invoice["invoice_id"], amount, payload)
+                text = f"💰 <b>Пополнение баланса на {amount}₽</b>\n\n1. Нажмите кнопку оплаты\n2. После оплаты нажмите «Я оплатил»"
+                await send_new_message(
+                    context, 
+                    user_id, 
+                    text, 
+                    InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💳 ОПЛАТИТЬ", url=invoice["bot_invoice_url"])],
+                        [InlineKeyboardButton("✅ Я ОПЛАТИЛ", callback_data=f"check_deposit_{invoice['invoice_id']}")],
+                        [InlineKeyboardButton("◀️ НАЗАД", callback_data="balance_menu")]
+                    ])
+                )
+            else:
+                await send_new_message(context, user_id, "❌ Ошибка создания счета", KeyboardBuilder.balance_menu())
+        
+        elif data.startswith("check_deposit_"):
+            invoice_id = int(data.replace("check_deposit_", ""))
             if await crypto.check_payment(invoice_id):
                 payment = await db.fetch_one("SELECT * FROM crypto_payments WHERE invoice_id = ?", (invoice_id,))
                 if payment and payment["status"] == "pending":
-                    plan_id = payment["plan_id"]
-                    plans = await ContentManager.get_all_plans()
-                    plan = plans.get(plan_id)
-                    if plan:
-                        ok, msg, config_str, email = await xui_manager.create_client(user_id, plan["days"])
-                        if ok:
-                            await UserManager.save_vpn_info(user_id, email, config_str)
-                            new_date = await UserManager.give_subscription(user_id, plan["days"])
-                            await UserManager.confirm_crypto_payment(invoice_id)
-                            await send_new_message(context, user_id,
-                                f"✅ <b>Оплата подтверждена!</b>\n\nУслуга {plan['name']} активирована!\n📅 До: {new_date.strftime('%d.%m.%Y')}\n\n🔗 <b>Ваш конфиг:</b>\n<code>{config_str}</code>",
-                                await KeyboardBuilder.main(role), auto_delete=False)
-                            qr = xui_manager.generate_qr_code(config_str)
-                            if qr:
-                                await context.bot.send_photo(chat_id=user_id, photo=qr)
-                        else:
-                            await send_new_message(context, user_id, f"❌ {msg}", await KeyboardBuilder.main(role))
+                    amount = payment["amount_rub"]
+                    await UserManager.add_balance(user_id, amount, "Пополнение баланса")
+                    await UserManager.confirm_crypto_payment(invoice_id)
+                    
+                    await send_new_message(
+                        context,
+                        user_id,
+                        f"✅ <b>Пополнение подтверждено!</b>\n\n💰 Баланс пополнен на {amount}₽",
+                        await KeyboardBuilder.main(role)
+                    )
                 await query.answer("✅ Платеж найден!", show_alert=True)
             else:
                 await query.answer("❌ Платеж не найден. Если вы оплатили, подождите минуту.", show_alert=True)
+        
+        elif data == "balance_history":
+            transactions = await UserManager.get_transactions(user_id, 10)
+            text = "📊 <b>ИСТОРИЯ ОПЕРАЦИЙ</b>\n\n"
+            if not transactions:
+                text += "История пуста"
+            else:
+                for t in transactions:
+                    sign = "+" if t["type"] == "deposit" else "-"
+                    date = datetime.fromisoformat(t["created_at"]).strftime("%d.%m %H:%M")
+                    text += f"{date} {sign}{abs(t['amount'])}₽ - {t['description']}\n"
+            await send_new_message(context, user_id, text, KeyboardBuilder.back())
         
         # ===== ПРОФИЛЬ =====
         elif data == "profile":
@@ -1634,30 +1766,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                 
                 role_emoji = "👑" if role == "admin" else "🧪" if role == "tester" else "👤"
-                text = f"{role_emoji} <b>ПРОФИЛЬ</b>\n\n📊 Статус: {status}\n📅 До: {end_str}\n⏱ Осталось: {max(0, days)} дн.\n🆔 ID: <code>{user_id}</code>"
+                balance = user.get("balance", 0)
+                text = f"{role_emoji} <b>ПРОФИЛЬ</b>\n\n💰 Баланс: {balance}₽\n📊 Статус: {status}\n📅 До: {end_str}\n⏱ Осталось: {max(0, days)} дн.\n🆔 ID: <code>{user_id}</code>"
                 
-                if user.get("vpn_config") and days > 0:
-                    text += f"\n\n🔗 <b>Конфиг:</b> {user['vpn_config'][:50]}..."
-                    kb = KeyboardBuilder.back()
-                    kb.inline_keyboard.insert(0, [InlineKeyboardButton("🔗 ПОКАЗАТЬ КОНФИГ", callback_data="show_config")])
-                    await send_new_message(context, user_id, text, kb)
+                profile_photo = user.get("profile_photo") or await ContentManager.get_menu_photo("profile")
+                
+                # Клавиатура с балансом
+                profile_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💰 БАЛАНС", callback_data="balance_menu")],
+                    [InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")],
+                    [InlineKeyboardButton("🔙 НАЗАД", callback_data="back_main")]
+                ])
+                
+                if profile_photo:
+                    await send_new_message(context, user_id, text, profile_kb, photo=profile_photo)
                 else:
-                    await send_new_message(context, user_id, text, KeyboardBuilder.back())
-        
-        # ===== ПОКАЗАТЬ КОНФИГ =====
-        elif data == "show_config":
-            user = await UserManager.get(user_id)
-            if user and user.get("vpn_config") and user.get("subscribe_until"):
-                try:
-                    if datetime.fromisoformat(user["subscribe_until"]) > datetime.now():
-                        await send_new_message(context, user_id, f"🔗 <b>Ваш конфиг:</b>\n<code>{user['vpn_config']}</code>", KeyboardBuilder.back(), auto_delete=False)
-                        qr = xui_manager.generate_qr_code(user['vpn_config'])
-                        if qr:
-                            await context.bot.send_photo(chat_id=user_id, photo=qr)
-                        return
-                except:
-                    pass
-            await query.answer("❌ Конфиг не найден или подписка не активна", show_alert=True)
+                    await send_new_message(context, user_id, text, profile_kb)
         
         # ===== РЕФЕРАЛЫ =====
         elif data == "referrals":
@@ -1665,7 +1789,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if user:
                 refs = await db.fetch_all("SELECT COUNT(*) as c FROM referrals WHERE referrer_id=?", (user_id,))
                 count = refs[0]["c"] if refs else 0
-                text = f"👥 <b>РЕФЕРАЛЫ</b>\n\nВаш ID: <code>{user_id}</code>\nПриглашено: {count}\n🎁 +{config.REFERRAL_BONUS_DAYS} дня за друга\n\n🔗 Ссылка:\n<code>https://t.me/{config.BOT_USERNAME}?start=ref_{user_id}</code>"
+                earnings = user.get("referral_earnings", 0)
+                text = f"👥 <b>РЕФЕРАЛЫ</b>\n\nВаш ID: <code>{user_id}</code>\nПриглашено: {count}\n💰 Заработано: {earnings}₽\n🎁 +{config.REFERRAL_BONUS_PERCENT}% от пополнений\n\n🔗 Ссылка:\n<code>https://t.me/{config.BOT_USERNAME}?start=ref_{user_id}</code>"
                 await send_new_message(context, user_id, text, KeyboardBuilder.referrals(str(user_id)))
         
         # ===== СТАТИСТИКА РЕФЕРАЛОВ =====
@@ -1684,11 +1809,187 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # ===== ПОДДЕРЖКА =====
         elif data == "support":
-            await send_new_message(context, user_id, "📞 <b>ПОДДЕРЖКА</b>\n\n@vpn_support_bot", KeyboardBuilder.back())
+            support_photo = await ContentManager.get_menu_photo("support")
+            if support_photo:
+                await send_new_message(
+                    context, 
+                    user_id, 
+                    "📞 <b>СЛУЖБА ПОДДЕРЖКИ</b>\n\nВыберите тему обращения:",
+                    KeyboardBuilder.support_menu(),
+                    photo=support_photo
+                )
+            else:
+                await send_new_message(
+                    context, 
+                    user_id, 
+                    "📞 <b>СЛУЖБА ПОДДЕРЖКИ</b>\n\nВыберите тему обращения:",
+                    KeyboardBuilder.support_menu()
+                )
+        
+        # ===== СОЗДАНИЕ ТИКЕТА =====
+        elif data.startswith("ticket_"):
+            subject_map = {
+                "ticket_connection": "🔧 Проблема с подключением",
+                "ticket_payment": "💰 Вопрос по оплате",
+                "ticket_other": "❓ Общий вопрос"
+            }
+            
+            if data in subject_map:
+                context.user_data['ticket_subject'] = subject_map[data]
+                await send_new_message(
+                    context,
+                    user_id,
+                    f"📝 <b>Создание обращения</b>\n\nТема: {subject_map[data]}\n\nОпишите вашу проблему подробно:",
+                    KeyboardBuilder.back()
+                )
+                context.user_data['awaiting_ticket_message'] = True
+        
+        # ===== ОБРАБОТКА ТИКЕТОВ ИЗ ГРУППЫ =====
+        elif data.startswith("ticket_reply_"):
+            parts = data.split("_")
+            ticket_id = int(parts[2])
+            target_user = int(parts[3])
+            
+            context.user_data['replying_to_ticket'] = ticket_id
+            context.user_data['replying_to_user'] = target_user
+            
+            await query.edit_message_text(
+                f"✏️ Введите ответ для пользователя (ID: {target_user}):\n\n"
+                "Ваш ответ будет отправлен в личные сообщения.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ ОТМЕНА", callback_data=f"ticket_cancel_{target_user}")
+                ]])
+            )
+            context.user_data['awaiting_ticket_reply'] = True
+
+        elif data.startswith("ticket_ban_"):
+            target_user = int(data.split("_")[2])
+            await UserManager.ban_user(target_user)
+            await query.edit_message_text(
+                f"✅ Пользователь {target_user} забанен.",
+                reply_markup=None
+            )
+            
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user,
+                    text="⛔ Вы были забанены администратором."
+                )
+            except:
+                pass
+
+        elif data.startswith("ticket_close_"):
+            ticket_id = int(data.split("_")[2])
+            await UserManager.close_ticket(ticket_id, user_id)
+            await query.edit_message_text(
+                f"✅ Тикет #{ticket_id} закрыт.",
+                reply_markup=None
+            )
+
+        elif data.startswith("ticket_give_"):
+            target_user = int(data.split("_")[2])
+            await query.edit_message_text(
+                f"🎁 Выберите услугу для пользователя {target_user}:",
+                reply_markup=KeyboardBuilder.ticket_give_menu(target_user)
+            )
+
+        elif data.startswith("ticket_give_vpn_"):
+            target_user = int(data.split("_")[3])
+            new_date = await UserManager.give_service_subscription(target_user, "vpn", admin_give=True)
+            await query.edit_message_text(
+                f"✅ Пользователю {target_user} выдана подписка VPN.\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
+                reply_markup=None
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user,
+                    text=f"🎉 Администратор выдал вам подписку VPN!\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}"
+                )
+            except:
+                pass
+
+        elif data.startswith("ticket_give_proxy_"):
+            target_user = int(data.split("_")[3])
+            new_date = await UserManager.give_service_subscription(target_user, "proxy", admin_give=True)
+            await query.edit_message_text(
+                f"✅ Пользователю {target_user} выдана подписка на Прокси TG.\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
+                reply_markup=None
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user,
+                    text=f"🎉 Администратор выдал вам подписку на Прокси TG!\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}"
+                )
+            except:
+                pass
+
+        elif data.startswith("ticket_give_antijammer_"):
+            target_user = int(data.split("_")[3])
+            new_date = await UserManager.give_service_subscription(target_user, "antijammer", admin_give=True)
+            await query.edit_message_text(
+                f"✅ Пользователю {target_user} выдана подписка на Антиглушилки.\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
+                reply_markup=None
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user,
+                    text=f"🎉 Администратор выдал вам подписку на Антиглушилки!\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}"
+                )
+            except:
+                pass
+
+        elif data.startswith("ticket_give_website_"):
+            target_user = int(data.split("_")[3])
+            new_date = await UserManager.give_service_subscription(target_user, "website", admin_give=True)
+            await query.edit_message_text(
+                f"✅ Пользователю {target_user} выдана подписка на Доступ к сайтам.\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
+                reply_markup=None
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user,
+                    text=f"🎉 Администратор выдал вам подписку на Доступ к сайтам!\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}"
+                )
+            except:
+                pass
+
+        elif data.startswith("ticket_cancel_"):
+            await query.edit_message_text(
+                "❌ Действие отменено.",
+                reply_markup=None
+            )
         
         # ===== АДМИН ПАНЕЛЬ =====
         elif data == "admin_menu" and is_admin:
             await send_new_message(context, user_id, "⚙️ <b>АДМИН ПАНЕЛЬ</b>", KeyboardBuilder.admin_panel())
+        
+        # ===== УПРАВЛЕНИЕ ФОТО МЕНЮ =====
+        elif data == "admin_menu_photos" and is_admin:
+            photos = await ContentManager.get_all_menu_photos()
+            text = "🖼️ <b>УПРАВЛЕНИЕ ФОТО МЕНЮ</b>\n\n"
+            
+            buttons = []
+            for photo in photos:
+                status = "✅ есть" if photo['photo_id'] else "❌ нет"
+                text += f"• {photo['description']}: {status}\n"
+                buttons.append([InlineKeyboardButton(
+                    f"📸 {photo['description']}",
+                    callback_data=f"admin_edit_menu_photo_{photo['menu_key']}"
+                )])
+            
+            buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")])
+            
+            await send_new_message(context, user_id, text, InlineKeyboardMarkup(buttons))
+        
+        elif data.startswith("admin_edit_menu_photo_") and is_admin:
+            menu_key = data.replace("admin_edit_menu_photo_", "")
+            context.user_data['editing_menu_photo'] = menu_key
+            await send_new_message(
+                context,
+                user_id,
+                f"🖼️ Отправьте фото для {menu_key}:",
+                KeyboardBuilder.back()
+            )
         
         # ===== УПРАВЛЕНИЕ БОТОМ =====
         elif data == "admin_bot_control" and is_admin:
@@ -1712,7 +2013,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_maintenance_on" and is_admin:
             config.MAINTENANCE_MODE = True
             await UserManager.log_maintenance("maintenance_on", user_id)
-            # Отправляем уведомление всем пользователям
             sent = await notify_maintenance(context, config.MAINTENANCE_MESSAGE)
             await send_new_message(context, user_id, 
                 f"🔧 Режим техработ включен!\n📢 Уведомление отправлено {sent} пользователям.", 
@@ -1735,7 +2035,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_stats" and is_admin:
             stats = await UserManager.get_stats()
             await send_new_message(context, user_id,
-                f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}\n🎁 Пробный: {stats['trial']}\n👑 Админы: {stats['admins']}\n🧪 Тестеры: {stats['testers']}\n📈 Конверсия: {stats['conversion']}%",
+                f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}\n🎁 Пробный: {stats['trial']}\n👑 Админы: {stats['admins']}\n🧪 Тестеры: {stats['testers']}\n💰 Всего баланс: {stats['total_balance']}₽\n📈 Конверсия: {stats['conversion']}%",
                 KeyboardBuilder.admin_panel())
         
         elif data == "tester_stats" and is_tester:
@@ -1743,7 +2043,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 stats = await UserManager.get_stats()
                 await send_new_message(context, user_id,
-                    f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}",
+                    f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}\n💰 Всего баланс: {stats['total_balance']}₽",
                     KeyboardBuilder.tester_panel())
         
         # ===== ПРОСМОТР ПОЛЬЗОВАТЕЛЕЙ =====
@@ -1763,7 +2063,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target = await UserManager.get(target_id)
             if target:
                 sub = target.get("subscribe_until", "Нет")[:10] if target.get("subscribe_until") else "Нет"
-                text = f"👤 <b>ИНФОРМАЦИЯ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\nСтатус: {'🟢' if not target.get('banned') else '🔴'}"
+                balance = target.get("balance", 0)
+                text = f"👤 <b>ИНФОРМАЦИЯ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\n💰 Баланс: {balance}₽\nСтатус: {'🟢' if not target.get('banned') else '🔴'}"
                 await send_new_message(context, user_id, text, KeyboardBuilder.back())
         
         # ===== ДЕЙСТВИЯ ТЕСТЕРА =====
@@ -1833,7 +2134,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for tid in config.TESTER_IDS:
                 u = await UserManager.get(tid)
                 if u:
-                    testers.append(f"• {u['first_name']} (@{u['username']}) - ID: {tid}")
+                    testers.append(f"• {u['first_name']} (@{u['username']}) - ID: {tid} | Баланс: {u.get('balance', 0)}₽")
             await send_new_message(context, user_id, "👥 <b>ТЕСТЕРЫ</b>\n\n" + ("\n".join(testers) if testers else "Нет тестеров"), KeyboardBuilder.admin_panel())
         
         elif data == "admin_tester_add" and is_admin:
@@ -1882,8 +2183,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target = await UserManager.get(target_id)
             if target:
                 sub = target.get("subscribe_until", "Нет")[:10] if target.get("subscribe_until") else "Нет"
-                text = f"👤 <b>ПОЛЬЗОВАТЕЛЬ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\nСтатус: {'🔴 ЗАБАНЕН' if target.get('banned') else '🟢 АКТИВЕН'}"
+                balance = target.get("balance", 0)
+                text = f"👤 <b>ПОЛЬЗОВАТЕЛЬ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\n💰 Баланс: {balance}₽\nСтатус: {'🔴 ЗАБАНЕН' if target.get('banned') else '🟢 АКТИВЕН'}"
                 await send_new_message(context, user_id, text, KeyboardBuilder.admin_user_actions(target_id, target.get('banned', False)))
+        
+        # ===== АДМИН: ВЫДАТЬ БОНУС =====
+        elif data.startswith("admin_give_bonus_") and is_admin:
+            target_id = int(data.split("_")[3])
+            context.user_data['admin_give_bonus_to'] = target_id
+            await send_new_message(context, user_id, f"💰 Введите сумму бонуса для пользователя {target_id}:", KeyboardBuilder.back())
+            context.user_data['awaiting_admin_bonus'] = True
         
         # ===== АДМИН: БАН/РАЗБАН =====
         elif data.startswith("admin_ban_") and is_admin:
@@ -1929,51 +2238,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 asyncio.create_task(start_mailing(context, user_id, context.user_data['mailing_text']))
                 del context.user_data['mailing_text']
         
-        # ===== ВЫБОР СЕРВЕРА =====
-        elif data == "select_server":
-            await send_new_message(context, user_id, "🌍 Выберите сервер", await KeyboardBuilder.servers())
-        
-        elif data.startswith("server_"):
-            sid = data.replace("server_", "")
-            await UserManager.update_server(user_id, sid)
-            await send_new_message(context, user_id, f"✅ Сервер выбран", KeyboardBuilder.back())
-        
-        # ===== ПРОТОКОЛЫ =====
-        elif data.startswith("protocol_"):
-            protocol = data.replace("protocol_", "")
-            await UserManager.update_protocol(user_id, protocol)
-            await send_new_message(context, user_id, f"✅ Протокол {protocol} сохранен", KeyboardBuilder.back())
-        
-        # ===== УСТРОЙСТВА =====
-        elif data == "my_devices":
-            await send_new_message(context, user_id, "📱 Устройства", KeyboardBuilder.devices())
-        
-        elif data.startswith("device_"):
-            device = data.replace("device_", "")
-            instructions = {
-                "android": "📱 ANDROID\n\n1. Установите OpenVPN Connect\n2. Скачайте конфиг\n3. Импортируйте",
-                "ios": "🍏 IOS\n\n1. Установите OpenVPN Connect\n2. Скачайте конфиг\n3. Импортируйте",
-                "windows": "💻 WINDOWS\n\n1. Установите OpenVPN GUI\n2. Поместите конфиг в папку config\n3. Запустите",
-                "macos": "🍎 MACOS\n\n1. Установите Tunnelblick\n2. Откройте конфиг",
-                "linux": "🐧 LINUX\n\n1. sudo apt install openvpn\n2. sudo openvpn --config config.ovpn"
-            }
-            await send_new_message(context, user_id, instr.get(device, "Инструкция"), KeyboardBuilder.devices())
-        
-        # ===== СКАЧАТЬ КОНФИГ =====
-        elif data == "download_config":
-            user = await UserManager.get(user_id)
-            if user and user.get("vpn_config") and user.get("subscribe_until"):
-                try:
-                    if datetime.fromisoformat(user["subscribe_until"]) > datetime.now():
-                        await send_new_message(context, user_id, f"🔗 <b>Ваш конфиг:</b>\n<code>{user['vpn_config']}</code>", KeyboardBuilder.back(), auto_delete=False)
-                        qr = xui_manager.generate_qr_code(user['vpn_config'])
-                        if qr:
-                            await context.bot.send_photo(chat_id=user_id, photo=qr)
-                        return
-                except:
-                    pass
-            await send_new_message(context, user_id, "❌ Подписка не активна", await KeyboardBuilder.plans("vpn"))
-        
     except Exception as e:
         logger.error(f"Ошибка button_handler: {e}", exc_info=True)
         try:
@@ -1985,19 +2249,41 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
-        if update.message.photo and context.user_data.get('editing_plan') and context.user_data.get('editing_field') == 'photo':
-            photo = update.message.photo[-1]
-            if await ContentManager.update_plan_photo(context.user_data['editing_plan'], photo.file_id):
-                await send_new_message(context, update.effective_chat.id, "✅ Фото обновлено", KeyboardBuilder.admin_panel())
-            else:
-                await send_new_message(context, update.effective_chat.id, "❌ Ошибка", KeyboardBuilder.admin_panel())
-            context.user_data.pop('editing_plan', None)
-            context.user_data.pop('editing_field', None)
+        # Обработка фото
+        if update.message.photo:
+            # Проверяем, это загрузка фото для меню?
+            if context.user_data.get('editing_menu_photo'):
+                menu_key = context.user_data['editing_menu_photo']
+                photo = update.message.photo[-1]
+                await ContentManager.update_menu_photo(menu_key, photo.file_id)
+                await send_new_message(
+                    context,
+                    update.effective_chat.id,
+                    f"✅ Фото для {menu_key} обновлено!",
+                    KeyboardBuilder.admin_panel()
+                )
+                context.user_data.pop('editing_menu_photo', None)
+                return
+            
+            # Обработка фото для тарифа
+            if context.user_data.get('editing_plan') and context.user_data.get('editing_field') == 'photo':
+                photo = update.message.photo[-1]
+                if await ContentManager.update_plan_photo(context.user_data['editing_plan'], photo.file_id):
+                    await send_new_message(context, update.effective_chat.id, "✅ Фото тарифа обновлено", KeyboardBuilder.admin_panel())
+                else:
+                    await send_new_message(context, update.effective_chat.id, "❌ Ошибка", KeyboardBuilder.admin_panel())
+                context.user_data.pop('editing_plan', None)
+                context.user_data.pop('editing_field', None)
+                return
         return
     
     text = update.message.text
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     role = await UserManager.get_role(user_id)
+    
+    # Автоудаление сообщения пользователя
+    asyncio.create_task(delete_user_message_later(context, chat_id, update.message.message_id))
     
     user = await UserManager.get(user_id)
     if user and user.get("banned"):
@@ -2007,6 +2293,89 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     # Проверяем статус бота для не-админов
     if not await is_bot_enabled(user_id) and role != "admin":
         await update.message.reply_text(config.MAINTENANCE_MESSAGE, parse_mode=ParseMode.HTML)
+        return
+    
+    # Обработка выдачи бонуса админом
+    if context.user_data.get('awaiting_admin_bonus') and role == "admin":
+        target_id = context.user_data.get('admin_give_bonus_to')
+        try:
+            amount = int(text.strip())
+            if amount > 0:
+                await UserManager.add_balance(target_id, amount, f"Бонус от администратора")
+                await send_new_message(context, user_id, f"✅ Бонус {amount}₽ выдан пользователю {target_id}", KeyboardBuilder.admin_panel())
+                try:
+                    await context.bot.send_message(
+                        chat_id=target_id,
+                        text=f"🎉 Администратор выдал вам бонус {amount}₽!",
+                        parse_mode=ParseMode.HTML
+                    )
+                except:
+                    pass
+            else:
+                await send_new_message(context, user_id, "❌ Сумма должна быть положительной", KeyboardBuilder.admin_panel())
+        except ValueError:
+            await send_new_message(context, user_id, "❌ Введите число", KeyboardBuilder.admin_panel())
+        
+        context.user_data.pop('awaiting_admin_bonus', None)
+        context.user_data.pop('admin_give_bonus_to', None)
+        return
+    
+    # Обработка создания тикета
+    if context.user_data.get('awaiting_ticket_message'):
+        subject = context.user_data.get('ticket_subject', 'Общий вопрос')
+        del context.user_data['awaiting_ticket_message']
+        del context.user_data['ticket_subject']
+        
+        # Создаём тикет
+        ticket_id = await UserManager.create_ticket(user_id, subject, text)
+        
+        # Отправляем в группу
+        user = await UserManager.get(user_id)
+        user_info = f"👤 <b>Новый тикет #{ticket_id}</b>\n\n"
+        user_info += f"🆔 ID: <code>{user_id}</code>\n"
+        user_info += f"📛 Имя: {user.get('first_name', '—')}\n"
+        user_info += f"📱 Юзернейм: @{user.get('username', '—')}\n"
+        user_info += f"🏷️ Тема: {subject}\n\n"
+        user_info += f"📝 <b>Сообщение:</b>\n{text}\n"
+        
+        await context.bot.send_message(
+            chat_id=config.TICKET_GROUP_ID,
+            text=user_info,
+            reply_markup=KeyboardBuilder.ticket_admin_actions(ticket_id, user_id),
+            parse_mode=ParseMode.HTML
+        )
+        
+        await send_new_message(
+            context,
+            user_id,
+            f"✅ Ваше обращение #{ticket_id} принято!\n\nАдминистратор ответит в ближайшее время.",
+            KeyboardBuilder.back()
+        )
+        return
+    
+    # Обработка ответа админа на тикет
+    if context.user_data.get('awaiting_ticket_reply'):
+        ticket_id = context.user_data.get('replying_to_ticket')
+        target_user = context.user_data.get('replying_to_user')
+        del context.user_data['awaiting_ticket_reply']
+        del context.user_data['replying_to_ticket']
+        del context.user_data['replying_to_user']
+        
+        # Отправляем ответ пользователю
+        try:
+            await context.bot.send_message(
+                chat_id=target_user,
+                text=f"📝 <b>Ответ администратора:</b>\n\n{text}",
+                parse_mode=ParseMode.HTML
+            )
+            await query.answer("✅ Ответ отправлен", show_alert=True)
+        except Exception as e:
+            await query.answer("❌ Ошибка отправки", show_alert=True)
+        
+        await query.edit_message_text(
+            f"✅ Ответ отправлен пользователю {target_user}.",
+            reply_markup=None
+        )
         return
     
     # Обработка добавления тестера
@@ -2047,7 +2416,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.pop('awaiting_mailing', None)
         return
     
-    # Обработка редактирования услуги (тестеры)
+    # Обработка редактирования услуги
     if context.user_data.get('editing_service') and context.user_data.get('editing_field') and (role == "admin" or role == "tester"):
         sid = context.user_data['editing_service']
         field = context.user_data['editing_field']
@@ -2065,6 +2434,8 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     update_data["emoji"] = text
                 elif field == "desc":
                     update_data["description"] = text
+                elif field == "order":
+                    update_data["sort_order"] = int(text)
                 
                 if await ContentManager.update_service_type(sid, update_data):
                     await send_new_message(context, user_id, "✅ Обновлено", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
@@ -2077,7 +2448,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.pop('editing_field', None)
         return
     
-    # Обработка редактирования тарифа (тестеры)
+    # Обработка редактирования тарифа
     if context.user_data.get('editing_plan') and context.user_data.get('editing_field') and (role == "admin" or role == "tester"):
         pid = context.user_data['editing_plan']
         field = context.user_data['editing_field']
@@ -2127,8 +2498,13 @@ async def start_mailing(context: ContextTypes.DEFAULT_TYPE, admin_id: int, text:
             blocked += 1
             continue
         try:
-            await context.bot.send_message(chat_id=user["user_id"], text=text, parse_mode=ParseMode.HTML)
+            msg = await context.bot.send_message(
+                chat_id=user["user_id"],
+                text=text,
+                parse_mode=ParseMode.HTML
+            )
             sent += 1
+            asyncio.create_task(schedule_message_deletion(context, user["user_id"], msg.message_id, config.AUTO_DELETE_BOT_MESSAGES))
         except:
             failed += 1
         if (sent + failed) % 10 == 0:
@@ -2142,7 +2518,7 @@ async def start_mailing(context: ContextTypes.DEFAULT_TYPE, admin_id: int, text:
 async def startup():
     global telegram_app
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК PLES VPN BOT v11.0 (ДВУХКОЛОНОЧНОЕ МЕНЮ)")
+    logger.info("🚀 ЗАПУСК PLES VPN BOT v17.0 (С БАЛАНСОМ)")
     logger.info("=" * 60)
     
     await keep_alive.initialize()
@@ -2155,7 +2531,6 @@ async def startup():
         return
     
     await crypto.check_connection()
-    await xui_manager.initialize()
     
     telegram_app = Application.builder().token(config.BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", cmd_start))
@@ -2173,6 +2548,7 @@ async def startup():
     
     logger.info(f"✅ Вебхук: {webhook_url}")
     logger.info(f"✅ Админы: {config.ADMIN_IDS}")
+    logger.info(f"✅ Группа тикетов: {config.TICKET_GROUP_ID}")
     logger.info(f"✅ Статус бота: {'ВКЛЮЧЕН' if config.BOT_ENABLED else 'ВЫКЛЮЧЕН'}")
     logger.info(f"✅ Режим техработ: {'ВКЛЮЧЕН' if config.MAINTENANCE_MODE else 'ВЫКЛЮЧЕН'}")
     logger.info("✅ Бот готов!")
@@ -2200,9 +2576,10 @@ async def webhook(request: Request):
 async def home():
     return {
         "status": "online", 
-        "version": "11.0",
+        "version": "17.0",
         "bot_enabled": config.BOT_ENABLED,
-        "maintenance_mode": config.MAINTENANCE_MODE
+        "maintenance_mode": config.MAINTENANCE_MODE,
+        "ticket_group": config.TICKET_GROUP_ID
     }
 
 @app.get("/health")
@@ -2218,4 +2595,4 @@ async def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("ples_vpn_bot_two_columns:app", host="0.0.0.0", port=port)
+    uvicorn.run("ples_vpn_bot_balance:app", host="0.0.0.0", port=port)
