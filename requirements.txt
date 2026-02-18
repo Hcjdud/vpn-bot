@@ -6,4 +6,4 @@ requests
 aiohttp
 qrcode
 pypng
-py3xui
+cryptobot-python
