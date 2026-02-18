@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║         🌟 PLES VPN BOT v17.0 - С БАЛАНСОМ                    ║
-║     Баланс в профиле • Пополнение • Автосписание              ║
-║     Без 3x-UI • Система тикетов • Рефералы                    ║
+║         🌟 PLES VPN BOT v19.0 - ОПЛАТА ЗВЁЗДАМИ              ║
+║     Рубли и Звёзды • Управление ценами в админке             ║
+║     Баланс • Тикеты • Рефералы • Админка                     ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -21,8 +21,8 @@ from collections import defaultdict
 
 from fastapi import FastAPI, Request
 import uvicorn
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters, PreCheckoutQueryHandler
 from telegram.constants import ParseMode
 import aiosqlite
 import requests
@@ -50,7 +50,7 @@ class Config:
     BOT_USERNAME = "Playinc_bot"
     
     # Группа для тикетов - ЗАМЕНИТЕ НА ID ВАШЕЙ ГРУППЫ
-    TICKET_GROUP_ID = -1003880204174  # ID вашей группы
+    TICKET_GROUP_ID = -1002345678901
     
     # CryptoBot
     CRYPTOBOT_TOKEN = "533707:AAyjZJjRSCxePyVGl6WYFx3rfWqgxZLhjvi"
@@ -64,7 +64,7 @@ class Config:
     
     # Реферальная система
     REFERRAL_BONUS_DAYS = 3
-    REFERRAL_BONUS_PERCENT = 10  # 10% от пополнений рефералов
+    REFERRAL_BONUS_PERCENT = 10
     
     # URL
     BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://ples-vpn.onrender.com")
@@ -282,6 +282,7 @@ class Database:
                         first_name TEXT,
                         subscribe_until TEXT,
                         balance INTEGER DEFAULT 0,
+                        stars_balance INTEGER DEFAULT 0,
                         trial_used INTEGER DEFAULT 0,
                         banned INTEGER DEFAULT 0,
                         role TEXT DEFAULT 'user',
@@ -311,7 +312,7 @@ class Database:
                     )
                 ''')
                 
-                # 💳 Таблица платежей
+                # 💳 Таблица платежей CryptoBot
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS crypto_payments (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -326,12 +327,28 @@ class Database:
                     )
                 ''')
                 
+                # ⭐ Таблица платежей Stars
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS stars_payments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER,
+                        charge_id TEXT UNIQUE,
+                        amount_stars INTEGER,
+                        plan_id TEXT,
+                        status TEXT DEFAULT 'pending',
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        paid_at TEXT,
+                        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                    )
+                ''')
+                
                 # 📊 Таблица транзакций баланса
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS balance_transactions (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER,
                         amount INTEGER,
+                        currency TEXT DEFAULT 'RUB',
                         type TEXT,
                         description TEXT,
                         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -348,13 +365,14 @@ class Database:
                     )
                 ''')
                 
-                # 💰 Таблица тарифов
+                # 💰 Таблица тарифов (с ценами в рублях и звёздах)
                 await db.execute('''
                     CREATE TABLE IF NOT EXISTS plans (
                         id TEXT PRIMARY KEY,
                         name TEXT,
                         days INTEGER,
-                        price INTEGER,
+                        price_rub INTEGER,
+                        price_stars INTEGER,
                         emoji TEXT,
                         enabled INTEGER DEFAULT 1,
                         description TEXT,
@@ -454,18 +472,18 @@ class Database:
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', s)
             
-            # Добавляем тарифы
+            # Добавляем тарифы с ценами в рублях и звёздах
             plans = [
-                ("vpn_1month", "🌱 1 месяц", 30, 299, "🌱", 1, "Базовый тариф", None, "vpn"),
-                ("vpn_3month", "🌿 3 месяца", 90, 699, "🌿", 1, "Популярный тариф", None, "vpn"),
-                ("vpn_6month", "🌳 6 месяцев", 180, 1199, "🌳", 1, "Выгодный тариф", None, "vpn"),
-                ("vpn_12month", "🏝️ 12 месяцев", 365, 1999, "🏝️", 1, "Максимальный тариф", None, "vpn")
+                ("vpn_1month", "🌱 1 месяц", 30, 299, 30, "🌱", 1, "Базовый тариф на 1 месяц", None, "vpn"),
+                ("vpn_3month", "🌿 3 месяца", 90, 699, 70, "🌿", 1, "Популярный тариф на 3 месяца", None, "vpn"),
+                ("vpn_6month", "🌳 6 месяцев", 180, 1199, 120, "🌳", 1, "Выгодный тариф на 6 месяцев", None, "vpn"),
+                ("vpn_12month", "🏝️ 12 месяцев", 365, 1999, 200, "🏝️", 1, "Максимальный тариф на год", None, "vpn")
             ]
             
             for p in plans:
                 await db.execute('''
-                    INSERT OR IGNORE INTO plans (id, name, days, price, emoji, enabled, description, photo_id, service_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO plans (id, name, days, price_rub, price_stars, emoji, enabled, description, photo_id, service_type)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', p)
             
             # Добавляем приветственный текст
@@ -588,8 +606,8 @@ class UserManager:
         
         await db.execute(
             """INSERT INTO users 
-               (user_id, username, first_name, referred_by, referral_code, last_active, role, balance) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+               (user_id, username, first_name, referred_by, referral_code, last_active, role, balance, stars_balance) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)""",
             (user_id, username, first_name, referred_by, referral_code, datetime.now().isoformat(), role)
         )
         
@@ -632,30 +650,32 @@ class UserManager:
         return True, f"✅ Пробный период {config.TRIAL_DAYS} дней активирован!\n📅 Действует до: {trial_end.strftime('%d.%m.%Y')}"
     
     @staticmethod
-    async def get_balance(user_id: int) -> int:
-        """Получить баланс пользователя"""
+    async def get_balance(user_id: int) -> Tuple[int, int]:
+        """Получить баланс пользователя (рубли, звёзды)"""
         user = await UserManager.get(user_id)
-        return user.get("balance", 0) if user else 0
+        if not user:
+            return (0, 0)
+        return (user.get("balance", 0), user.get("stars_balance", 0))
     
     @staticmethod
-    async def add_balance(user_id: int, amount: int, description: str = "Пополнение баланса"):
-        """Добавить средства на баланс"""
+    async def add_rub_balance(user_id: int, amount: int, description: str = "Пополнение баланса"):
+        """Добавить рубли на баланс"""
         await db.execute(
             "UPDATE users SET balance = balance + ? WHERE user_id = ?",
             (amount, user_id)
         )
         await db.execute(
-            "INSERT INTO balance_transactions (user_id, amount, type, description) VALUES (?, ?, 'deposit', ?)",
+            "INSERT INTO balance_transactions (user_id, amount, currency, type, description) VALUES (?, ?, 'RUB', 'deposit', ?)",
             (user_id, amount, description)
         )
         
-        # Начисляем бонус рефереру
+        # Реферальный бонус
         user = await UserManager.get(user_id)
         if user and user.get("referred_by"):
             referrer_id = user["referred_by"]
             bonus = int(amount * config.REFERRAL_BONUS_PERCENT / 100)
             if bonus > 0:
-                await UserManager.add_balance(referrer_id, bonus, f"Реферальный бонус от пользователя {user_id}")
+                await UserManager.add_rub_balance(referrer_id, bonus, f"Реферальный бонус от пользователя {user_id}")
                 await db.execute(
                     "UPDATE users SET referral_earnings = referral_earnings + ? WHERE user_id = ?",
                     (bonus, referrer_id)
@@ -665,9 +685,23 @@ class UserManager:
         return True
     
     @staticmethod
-    async def spend_balance(user_id: int, amount: int, description: str) -> bool:
-        """Списать средства с баланса"""
-        balance = await UserManager.get_balance(user_id)
+    async def add_stars_balance(user_id: int, amount: int, description: str = "Пополнение звёздами"):
+        """Добавить звёзды на баланс"""
+        await db.execute(
+            "UPDATE users SET stars_balance = stars_balance + ? WHERE user_id = ?",
+            (amount, user_id)
+        )
+        await db.execute(
+            "INSERT INTO balance_transactions (user_id, amount, currency, type, description) VALUES (?, ?, 'STARS', 'deposit', ?)",
+            (user_id, amount, description)
+        )
+        logger.info(f"⭐ Баланс пользователя {user_id} пополнен на {amount} Stars")
+        return True
+    
+    @staticmethod
+    async def spend_rub_balance(user_id: int, amount: int, description: str) -> bool:
+        """Списать рубли с баланса"""
+        balance, _ = await UserManager.get_balance(user_id)
         if balance < amount:
             return False
         
@@ -676,14 +710,30 @@ class UserManager:
             (amount, user_id)
         )
         await db.execute(
-            "INSERT INTO balance_transactions (user_id, amount, type, description) VALUES (?, ?, 'spend', ?)",
+            "INSERT INTO balance_transactions (user_id, amount, currency, type, description) VALUES (?, ?, 'RUB', 'spend', ?)",
+            (user_id, -amount, description)
+        )
+        return True
+    
+    @staticmethod
+    async def spend_stars_balance(user_id: int, amount: int, description: str) -> bool:
+        """Списать звёзды с баланса"""
+        _, stars = await UserManager.get_balance(user_id)
+        if stars < amount:
+            return False
+        
+        await db.execute(
+            "UPDATE users SET stars_balance = stars_balance - ? WHERE user_id = ?",
+            (amount, user_id)
+        )
+        await db.execute(
+            "INSERT INTO balance_transactions (user_id, amount, currency, type, description) VALUES (?, ?, 'STARS', 'spend', ?)",
             (user_id, -amount, description)
         )
         return True
     
     @staticmethod
     async def get_transactions(user_id: int, limit: int = 10) -> List[Dict]:
-        """Получить историю транзакций"""
         return await db.fetch_all(
             "SELECT * FROM balance_transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
             (user_id, limit)
@@ -711,18 +761,75 @@ class UserManager:
         return new
     
     @staticmethod
-    async def buy_subscription(user_id: int, plan_id: str, plan_price: int, plan_days: int) -> Tuple[bool, str]:
-        """Покупка подписки за баланс"""
-        balance = await UserManager.get_balance(user_id)
+    async def buy_subscription_rub(user_id: int, plan_id: str, plan_price: int, plan_days: int) -> Tuple[bool, str]:
+        """Покупка подписки за рубли"""
+        balance, _ = await UserManager.get_balance(user_id)
         if balance < plan_price:
-            return False, f"❌ Недостаточно средств. Нужно: {plan_price}₽, у вас: {balance}₽"
+            return False, f"❌ Недостаточно рублей. Нужно: {plan_price}₽, у вас: {balance}₽"
         
-        success = await UserManager.spend_balance(user_id, plan_price, f"Покупка подписки {plan_id}")
+        success = await UserManager.spend_rub_balance(user_id, plan_price, f"Покупка подписки {plan_id}")
         if not success:
             return False, "❌ Ошибка списания средств"
         
         new_date = await UserManager.give_subscription(user_id, plan_days)
         return True, f"✅ Подписка активирована до {new_date.strftime('%d.%m.%Y')}"
+    
+    @staticmethod
+    async def buy_subscription_stars(user_id: int, plan_id: str, plan_price: int, plan_days: int) -> Tuple[bool, str]:
+        """Покупка подписки за звёзды"""
+        _, stars = await UserManager.get_balance(user_id)
+        if stars < plan_price:
+            return False, f"❌ Недостаточно звёзд. Нужно: {plan_price}⭐, у вас: {stars}⭐"
+        
+        success = await UserManager.spend_stars_balance(user_id, plan_price, f"Покупка подписки {plan_id} за звёзды")
+        if not success:
+            return False, "❌ Ошибка списания звёзд"
+        
+        new_date = await UserManager.give_subscription(user_id, plan_days)
+        return True, f"✅ Подписка активирована до {new_date.strftime('%d.%m.%Y')}"
+    
+    @staticmethod
+    async def save_stars_payment(user_id: int, charge_id: str, amount_stars: int, plan_id: str):
+        """Сохранить платеж звёздами"""
+        await db.execute(
+            "INSERT INTO stars_payments (user_id, charge_id, amount_stars, plan_id) VALUES (?, ?, ?, ?)",
+            (user_id, charge_id, amount_stars, plan_id)
+        )
+    
+    @staticmethod
+    async def confirm_stars_payment(charge_id: str):
+        """Подтвердить платеж звёздами"""
+        await db.execute(
+            "UPDATE stars_payments SET status = 'paid', paid_at = ? WHERE charge_id = ?",
+            (datetime.now().isoformat(), charge_id)
+        )
+    
+    @staticmethod
+    async def get_plans() -> Dict:
+        """Получить все тарифы"""
+        plans = await db.fetch_all("SELECT * FROM plans WHERE enabled = 1 ORDER BY days")
+        result = {}
+        for p in plans:
+            result[p["id"]] = {
+                "name": p["name"],
+                "days": p["days"],
+                "price_rub": p["price_rub"],
+                "price_stars": p["price_stars"],
+                "emoji": p["emoji"],
+                "description": p["description"],
+                "photo_id": p["photo_id"],
+                "service_type": p["service_type"]
+            }
+        return result
+    
+    @staticmethod
+    async def update_plan_prices(plan_id: str, price_rub: int, price_stars: int):
+        """Обновить цены тарифа"""
+        await db.execute(
+            "UPDATE plans SET price_rub = ?, price_stars = ?, updated_at = ? WHERE id = ?",
+            (price_rub, price_stars, datetime.now().isoformat(), plan_id)
+        )
+        return True
     
     @staticmethod
     async def ban_user(user_id: int):
@@ -738,6 +845,7 @@ class UserManager:
         total = len(users)
         active = banned = trial = testers = admins = 0
         total_balance = 0
+        total_stars = 0
         
         for u in users:
             if u.get("role") == "admin":
@@ -755,11 +863,13 @@ class UserManager:
                 except:
                     pass
             total_balance += u.get("balance", 0)
+            total_stars += u.get("stars_balance", 0)
         
         return {
             "total": total, "active": active, "banned": banned,
             "trial": trial, "testers": testers, "admins": admins,
             "total_balance": total_balance,
+            "total_stars": total_stars,
             "conversion": round(active / total * 100, 1) if total else 0
         }
     
@@ -792,7 +902,6 @@ class UserManager:
     
     @staticmethod
     async def create_ticket(user_id: int, subject: str, message: str) -> int:
-        """Создание нового тикета"""
         user = await UserManager.get(user_id)
         await db.execute(
             """INSERT INTO tickets 
@@ -807,7 +916,6 @@ class UserManager:
     
     @staticmethod
     async def close_ticket(ticket_id: int, admin_id: int):
-        """Закрыть тикет"""
         await db.execute(
             "UPDATE tickets SET status = 'closed', admin_id = ?, closed_at = ? WHERE id = ?",
             (admin_id, datetime.now().isoformat(), ticket_id)
@@ -815,7 +923,6 @@ class UserManager:
     
     @staticmethod
     async def add_ticket_reply(ticket_id: int, user_id: int, message: str, is_admin: bool = False):
-        """Добавить ответ в тикет"""
         await db.execute(
             "INSERT INTO ticket_replies (ticket_id, user_id, message, is_admin) VALUES (?, ?, ?, ?)",
             (ticket_id, user_id, message, 1 if is_admin else 0)
@@ -823,7 +930,6 @@ class UserManager:
     
     @staticmethod
     async def give_service_subscription(user_id: int, service_type: str, admin_give: bool = False):
-        """Выдача подписки на конкретную услугу"""
         days_map = {
             "vpn": 30,
             "proxy": 30,
@@ -894,7 +1000,7 @@ class ContentManager:
             (service_type,)
         )
         return {p["id"]: {
-            "name": p["name"], "days": p["days"], "price": p["price"],
+            "name": p["name"], "days": p["days"], "price_rub": p["price_rub"], "price_stars": p["price_stars"],
             "emoji": p["emoji"], "description": p["description"], "photo_id": p["photo_id"]
         } for p in plans}
     
@@ -902,7 +1008,7 @@ class ContentManager:
     async def get_all_plans() -> Dict:
         plans = await db.fetch_all("SELECT * FROM plans WHERE enabled = 1 ORDER BY service_type, days")
         return {p["id"]: {
-            "name": p["name"], "days": p["days"], "price": p["price"],
+            "name": p["name"], "days": p["days"], "price_rub": p["price_rub"], "price_stars": p["price_stars"],
             "emoji": p["emoji"], "description": p["description"],
             "photo_id": p["photo_id"], "service_type": p["service_type"]
         } for p in plans}
@@ -914,9 +1020,17 @@ class ContentManager:
     @staticmethod
     async def update_plan(plan_id: str, data: Dict):
         await db.execute(
-            """UPDATE plans SET name=?, days=?, price=?, emoji=?, description=?, photo_id=?, service_type=?, updated_at=? WHERE id=?""",
-            (data["name"], data["days"], data["price"], data["emoji"], data["description"],
+            """UPDATE plans SET name=?, days=?, price_rub=?, price_stars=?, emoji=?, description=?, photo_id=?, service_type=?, updated_at=? WHERE id=?""",
+            (data["name"], data["days"], data["price_rub"], data["price_stars"], data["emoji"], data["description"],
              data.get("photo_id"), data.get("service_type"), datetime.now().isoformat(), plan_id)
+        )
+        return True
+    
+    @staticmethod
+    async def update_plan_prices(plan_id: str, price_rub: int, price_stars: int):
+        await db.execute(
+            "UPDATE plans SET price_rub = ?, price_stars = ?, updated_at = ? WHERE id = ?",
+            (price_rub, price_stars, datetime.now().isoformat(), plan_id)
         )
         return True
     
@@ -931,17 +1045,10 @@ class ContentManager:
 # ==================== ДАННЫЕ ====================
 
 PROTOCOLS = ["OpenVPN", "WireGuard", "IKEv2"]
-PLANS = {
-    "1month": {"name": "🌱 1 месяц", "days": 30, "price": 299},
-    "3month": {"name": "🌿 3 месяца", "days": 90, "price": 699},
-    "6month": {"name": "🌳 6 месяцев", "days": 180, "price": 1199},
-    "12month": {"name": "🏝️ 12 месяцев", "days": 365, "price": 1999}
-}
 
 # ==================== ФУНКЦИИ ДЛЯ УДАЛЕНИЯ СООБЩЕНИЙ ====================
 
 async def schedule_message_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int):
-    """Запланировать удаление сообщения бота через указанное время"""
     try:
         await asyncio.sleep(delay)
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
@@ -950,7 +1057,6 @@ async def schedule_message_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id:
         logger.debug(f"Не удалось автоудалить сообщение {message_id}: {e}")
 
 async def delete_user_message_later(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
-    """Удаление сообщения пользователя через заданное время"""
     try:
         await asyncio.sleep(config.AUTO_DELETE_USER_MESSAGES)
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
@@ -959,7 +1065,6 @@ async def delete_user_message_later(context: ContextTypes.DEFAULT_TYPE, chat_id:
         logger.debug(f"Не удалось удалить сообщение пользователя {message_id}: {e}")
 
 async def delete_previous_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    """Принудительное удаление предыдущего сообщения бота"""
     try:
         user = await UserManager.get(chat_id)
         if user and user.get("last_message_id"):
@@ -972,7 +1077,6 @@ async def delete_previous_message(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         logger.debug(f"Ошибка при удалении предыдущего сообщения: {e}")
 
 async def send_new_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, keyboard=None, photo=None, auto_delete: bool = True):
-    """Отправить новое сообщение, удалив предыдущее"""
     try:
         await delete_previous_message(context, chat_id)
         
@@ -1036,7 +1140,6 @@ async def check_tester_action(user_id: int, context: ContextTypes.DEFAULT_TYPE, 
 # ==================== ФУНКЦИЯ ПРОВЕРКИ СТАТУСА БОТА ====================
 
 async def is_bot_enabled(user_id: int) -> bool:
-    """Проверяет, включен ли бот для пользователя"""
     role = await UserManager.get_role(user_id)
     if role == "admin":
         return True
@@ -1049,7 +1152,6 @@ async def is_bot_enabled(user_id: int) -> bool:
 class KeyboardBuilder:
     @staticmethod
     async def main(role: str = "user"):
-        """Главное меню в 2 колонки"""
         services = await ContentManager.get_service_types()
         
         service_buttons = []
@@ -1105,14 +1207,14 @@ class KeyboardBuilder:
             row = []
             pid, plan = plan_list[i]
             row.append(InlineKeyboardButton(
-                f"{plan['emoji']} {plan['name']} - {plan['price']}₽",
-                callback_data=f"buy_{pid}"
+                f"{plan['emoji']} {plan['name']}",
+                callback_data=f"show_plan_{pid}"
             ))
             if i + 1 < len(plan_list):
                 pid2, plan2 = plan_list[i + 1]
                 row.append(InlineKeyboardButton(
-                    f"{plan2['emoji']} {plan2['name']} - {plan2['price']}₽",
-                    callback_data=f"buy_{pid2}"
+                    f"{plan2['emoji']} {plan2['name']}",
+                    callback_data=f"show_plan_{pid2}"
                 ))
             buttons.append(row)
         
@@ -1122,36 +1224,42 @@ class KeyboardBuilder:
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
-    def balance_menu():
-        """Меню баланса"""
+    def plan_payment(plan_id: str, plan_name: str, price_rub: int, price_stars: int):
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("💰 ПОПОЛНИТЬ БАЛАНС", callback_data="deposit")],
+            [InlineKeyboardButton(f"💳 Оплатить {price_rub}₽ (Баланс)", callback_data=f"buy_rub_{plan_id}")],
+            [InlineKeyboardButton(f"⭐ Оплатить {price_stars} Stars", callback_data=f"buy_stars_{plan_id}")],
+            [InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")]
+        ])
+    
+    @staticmethod
+    def balance_menu():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 ПОПОЛНИТЬ РУБЛИ", callback_data="deposit_rub")],
+            [InlineKeyboardButton("⭐ ПОПОЛНИТЬ ЗВЁЗДЫ", callback_data="deposit_stars")],
             [InlineKeyboardButton("📊 ИСТОРИЯ", callback_data="balance_history")],
             [InlineKeyboardButton("◀️ НАЗАД", callback_data="profile")]
         ])
     
     @staticmethod
-    def deposit_amounts():
-        """Суммы для пополнения"""
+    def deposit_rub_amounts():
         return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("100 ₽", callback_data="deposit_100"),
-                InlineKeyboardButton("300 ₽", callback_data="deposit_300")
-            ],
-            [
-                InlineKeyboardButton("500 ₽", callback_data="deposit_500"),
-                InlineKeyboardButton("1000 ₽", callback_data="deposit_1000")
-            ],
-            [
-                InlineKeyboardButton("2000 ₽", callback_data="deposit_2000"),
-                InlineKeyboardButton("5000 ₽", callback_data="deposit_5000")
-            ],
+            [InlineKeyboardButton("100 ₽", callback_data="rub_100"), InlineKeyboardButton("300 ₽", callback_data="rub_300")],
+            [InlineKeyboardButton("500 ₽", callback_data="rub_500"), InlineKeyboardButton("1000 ₽", callback_data="rub_1000")],
+            [InlineKeyboardButton("2000 ₽", callback_data="rub_2000"), InlineKeyboardButton("5000 ₽", callback_data="rub_5000")],
+            [InlineKeyboardButton("◀️ НАЗАД", callback_data="balance_menu")]
+        ])
+    
+    @staticmethod
+    def deposit_stars_amounts():
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("50 ⭐", callback_data="stars_50"), InlineKeyboardButton("100 ⭐", callback_data="stars_100")],
+            [InlineKeyboardButton("250 ⭐", callback_data="stars_250"), InlineKeyboardButton("500 ⭐", callback_data="stars_500")],
+            [InlineKeyboardButton("1000 ⭐", callback_data="stars_1000"), InlineKeyboardButton("2500 ⭐", callback_data="stars_2500")],
             [InlineKeyboardButton("◀️ НАЗАД", callback_data="balance_menu")]
         ])
     
     @staticmethod
     def support_menu():
-        """Меню поддержки"""
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("🔧 ПРОБЛЕМА С ПОДКЛЮЧЕНИЕМ", callback_data="ticket_connection")],
             [InlineKeyboardButton("💰 ВОПРОС ПО ОПЛАТЕ", callback_data="ticket_payment")],
@@ -1161,7 +1269,6 @@ class KeyboardBuilder:
     
     @staticmethod
     def ticket_admin_actions(ticket_id: int, user_id: int):
-        """Кнопки для админов в группе"""
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("✅ ОТВЕТИТЬ", callback_data=f"ticket_reply_{ticket_id}_{user_id}"),
@@ -1175,7 +1282,6 @@ class KeyboardBuilder:
     
     @staticmethod
     def ticket_give_menu(user_id: int):
-        """Меню выдачи подписки для админов"""
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("🌍 VPN", callback_data=f"ticket_give_vpn_{user_id}")],
             [InlineKeyboardButton("📱 ПРОКСИ TG", callback_data=f"ticket_give_proxy_{user_id}")],
@@ -1197,7 +1303,7 @@ class KeyboardBuilder:
             ],
             [
                 InlineKeyboardButton("🏷️ УСЛУГИ", callback_data="admin_services"),
-                InlineKeyboardButton("💰 ТАРИФЫ", callback_data="admin_plans")
+                InlineKeyboardButton("💰 ТАРИФЫ (₽/⭐)", callback_data="admin_plans")
             ],
             [
                 InlineKeyboardButton("🧪 ТЕСТЕРЫ", callback_data="admin_testers"),
@@ -1344,16 +1450,17 @@ class KeyboardBuilder:
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"admin_plan_name_{plan_id}"),
-                InlineKeyboardButton("💰 ЦЕНА", callback_data=f"admin_plan_price_{plan_id}")
+                InlineKeyboardButton("📅 ДНИ", callback_data=f"admin_plan_days_{plan_id}")
             ],
             [
-                InlineKeyboardButton("📅 ДНИ", callback_data=f"admin_plan_days_{plan_id}"),
-                InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"admin_plan_emoji_{plan_id}")
+                InlineKeyboardButton("💰 РУБЛИ", callback_data=f"admin_plan_price_rub_{plan_id}"),
+                InlineKeyboardButton("⭐ ЗВЁЗДЫ", callback_data=f"admin_plan_price_stars_{plan_id}")
             ],
             [
-                InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"admin_plan_desc_{plan_id}"),
-                InlineKeyboardButton("🖼️ ФОТО", callback_data=f"admin_plan_photo_{plan_id}")
+                InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"admin_plan_emoji_{plan_id}"),
+                InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"admin_plan_desc_{plan_id}")
             ],
+            [InlineKeyboardButton("🖼️ ФОТО", callback_data=f"admin_plan_photo_{plan_id}")],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_plans")]
         ])
     
@@ -1362,11 +1469,11 @@ class KeyboardBuilder:
         return InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"tester_plan_name_{plan_id}"),
-                InlineKeyboardButton("💰 ЦЕНА", callback_data=f"tester_plan_price_{plan_id}")
+                InlineKeyboardButton("💰 РУБЛИ", callback_data=f"tester_plan_price_rub_{plan_id}")
             ],
             [
-                InlineKeyboardButton("📅 ДНИ", callback_data=f"tester_plan_days_{plan_id}"),
-                InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"tester_plan_emoji_{plan_id}")
+                InlineKeyboardButton("⭐ ЗВЁЗДЫ", callback_data=f"tester_plan_price_stars_{plan_id}"),
+                InlineKeyboardButton("📅 ДНИ", callback_data=f"tester_plan_days_{plan_id}")
             ],
             [InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"tester_plan_desc_{plan_id}")],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="tester_plans")]
@@ -1386,8 +1493,9 @@ class KeyboardBuilder:
             role_emoji = {"admin": "👑", "tester": "🧪", "user": "👤"}.get(user.get('role'), "👤")
             status = "🔴" if user.get('banned') else "🟢"
             sub = "✅" if user.get('subscribe_until') and datetime.fromisoformat(user['subscribe_until']) > datetime.now() else "❌"
-            balance = user.get('balance', 0)
-            btn_text = f"{role_emoji}{status}{sub} {name} | {balance}₽"
+            rub = user.get('balance', 0)
+            stars = user.get('stars_balance', 0)
+            btn_text = f"{role_emoji}{status}{sub} {name} | {rub}₽ {stars}⭐"
             
             current_row.append(InlineKeyboardButton(btn_text, callback_data=f"admin_user_{user['user_id']}"))
             
@@ -1419,8 +1527,9 @@ class KeyboardBuilder:
             name = user.get('first_name', '—')[:8]
             status = "🟢" if not user.get('banned') else "🔴"
             sub = "✅" if user.get('subscribe_until') and datetime.fromisoformat(user['subscribe_until']) > datetime.now() else "❌"
-            balance = user.get('balance', 0)
-            btn_text = f"{status}{sub} {name} | {balance}₽"
+            rub = user.get('balance', 0)
+            stars = user.get('stars_balance', 0)
+            btn_text = f"{status}{sub} {name} | {rub}₽ {stars}⭐"
             
             current_row.append(InlineKeyboardButton(btn_text, callback_data=f"tester_view_user_{user['user_id']}"))
             
@@ -1442,7 +1551,8 @@ class KeyboardBuilder:
     @staticmethod
     def admin_user_actions(user_id: int, is_banned: bool):
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("💰 ВЫДАТЬ БОНУС", callback_data=f"admin_give_bonus_{user_id}")],
+            [InlineKeyboardButton("💰 ВЫДАТЬ РУБЛИ", callback_data=f"admin_give_rub_{user_id}")],
+            [InlineKeyboardButton("⭐ ВЫДАТЬ ЗВЁЗДЫ", callback_data=f"admin_give_stars_{user_id}")],
             [InlineKeyboardButton("📅 ВЫДАТЬ ПОДПИСКУ", callback_data=f"admin_give_{user_id}")],
             [InlineKeyboardButton("🔒 ЗАБАНИТЬ" if not is_banned else "🔓 РАЗБАНИТЬ",
                                  callback_data=f"admin_ban_{user_id}" if not is_banned else f"admin_unban_{user_id}")],
@@ -1506,7 +1616,7 @@ async def notify_maintenance(context: ContextTypes.DEFAULT_TYPE, message: str):
     logger.info(f"✅ Уведомление отправлено {sent} пользователям")
     return sent
 
-# ==================== ФОНОВАЯ ПРОВЕРКА ПЛАТЕЖЕЙ ====================
+# ==================== ФОНОВАЯ ПРОВЕРКА ПЛАТЕЖЕЙ CRYPTOBOT ====================
 
 async def check_pending_payments():
     while True:
@@ -1521,8 +1631,7 @@ async def check_pending_payments():
                     user_id = payment["user_id"]
                     amount = payment["amount_rub"]
                     
-                    # Начисляем баланс
-                    await UserManager.add_balance(user_id, amount, f"Пополнение через CryptoBot")
+                    await UserManager.add_rub_balance(user_id, amount, "Пополнение через CryptoBot")
                     await UserManager.confirm_crypto_payment(payment["invoice_id"])
                     
                     await telegram_app.bot.send_message(
@@ -1543,10 +1652,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = user.id
         chat_id = update.effective_chat.id
         
-        # Автоудаление сообщения пользователя
         asyncio.create_task(delete_user_message_later(context, chat_id, update.message.message_id))
         
-        # Проверяем статус бота
         if not await is_bot_enabled(user_id):
             msg = await context.bot.send_message(
                 chat_id=chat_id,
@@ -1572,8 +1679,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         role = await UserManager.get_role(user.id)
-        
-        # Получаем фото для главного меню
         menu_photo = await ContentManager.get_menu_photo("main_menu")
         
         if menu_photo:
@@ -1604,8 +1709,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = query.from_user.id
         chat_id = query.message.chat_id
         
-        # Проверяем статус бота (кроме админских кнопок)
-        if not data.startswith("admin_") and not data.startswith("back_main"):
+        # Проверяем статус бота (кроме админских кнопок и кнопок из группы)
+        if not data.startswith("admin_") and not data.startswith("back_main") and not data.startswith("ticket_"):
             if not await is_bot_enabled(user_id):
                 await query.answer("🔧 Бот временно недоступен", show_alert=True)
                 return
@@ -1660,48 +1765,71 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await KeyboardBuilder.service_plans(service_id)
                 )
         
+        # ===== ПОКАЗАТЬ ТАРИФ =====
+        elif data.startswith("show_plan_"):
+            plan_id = data.replace("show_plan_", "")
+            plans = await ContentManager.get_all_plans()
+            if plan_id in plans:
+                plan = plans[plan_id]
+                rub, stars = await UserManager.get_balance(user_id)
+                text = (
+                    f"📦 <b>{plan['emoji']} {plan['name']}</b>\n\n"
+                    f"{plan['description']}\n\n"
+                    f"💰 Цена: {plan['price_rub']}₽ или {plan['price_stars']}⭐\n"
+                    f"📅 Дней: {plan['days']}\n\n"
+                    f"💳 Ваш баланс: {rub}₽ и {stars}⭐"
+                )
+                await send_new_message(
+                    context,
+                    user_id,
+                    text,
+                    KeyboardBuilder.plan_payment(plan_id, plan['name'], plan['price_rub'], plan['price_stars'])
+                )
+            else:
+                await send_new_message(context, user_id, "❌ Тариф не найден", await KeyboardBuilder.main(role))
+        
+        # ===== ПОКУПКА ЗА РУБЛИ =====
+        elif data.startswith("buy_rub_"):
+            plan_id = data.replace("buy_rub_", "")
+            plans = await ContentManager.get_all_plans()
+            if plan_id in plans:
+                plan = plans[plan_id]
+                success, msg = await UserManager.buy_subscription_rub(user_id, plan_id, plan["price_rub"], plan["days"])
+                await send_new_message(context, user_id, msg, await KeyboardBuilder.main(role))
+            else:
+                await send_new_message(context, user_id, "❌ Тариф не найден", await KeyboardBuilder.main(role))
+        
+        # ===== ПОКУПКА ЗА ЗВЁЗДЫ =====
+        elif data.startswith("buy_stars_"):
+            plan_id = data.replace("buy_stars_", "")
+            plans = await ContentManager.get_all_plans()
+            if plan_id in plans:
+                plan = plans[plan_id]
+                success, msg = await UserManager.buy_subscription_stars(user_id, plan_id, plan["price_stars"], plan["days"])
+                await send_new_message(context, user_id, msg, await KeyboardBuilder.main(role))
+            else:
+                await send_new_message(context, user_id, "❌ Тариф не найден", await KeyboardBuilder.main(role))
+        
         # ===== ПРОБНЫЙ ПЕРИОД =====
         elif data == "trial":
             ok, msg = await UserManager.activate_trial(user_id)
             await send_new_message(context, user_id, msg, await KeyboardBuilder.main(role))
         
-        # ===== ПОКУПКА ЗА БАЛАНС =====
-        elif data.startswith("buy_"):
-            plan_id = data.replace("buy_", "")
-            plans = await ContentManager.get_all_plans()
-            if plan_id in plans:
-                plan = plans[plan_id]
-                
-                # Проверяем баланс
-                balance = await UserManager.get_balance(user_id)
-                if balance < plan["price"]:
-                    await send_new_message(
-                        context, 
-                        user_id, 
-                        f"❌ Недостаточно средств!\n\n💰 Ваш баланс: {balance}₽\n💵 Нужно: {plan['price']}₽",
-                        KeyboardBuilder.balance_menu()
-                    )
-                    return
-                
-                # Покупаем
-                success, msg = await UserManager.buy_subscription(user_id, plan_id, plan["price"], plan["days"])
-                await send_new_message(context, user_id, msg, await KeyboardBuilder.main(role))
-            else:
-                await send_new_message(context, user_id, "❌ Тариф не найден", await KeyboardBuilder.main(role))
-        
         # ===== БАЛАНС =====
         elif data == "balance_menu":
-            balance = await UserManager.get_balance(user_id)
-            text = f"💰 <b>ВАШ БАЛАНС</b>\n\n{balance}₽"
+            rub, stars = await UserManager.get_balance(user_id)
+            text = f"💰 <b>ВАШ БАЛАНС</b>\n\n{stars} ⭐ Звёзд\n{ rub} ₽ Рублей"
             await send_new_message(context, user_id, text, KeyboardBuilder.balance_menu())
         
-        elif data == "deposit":
-            await send_new_message(context, user_id, "💰 Выберите сумму пополнения:", KeyboardBuilder.deposit_amounts())
+        elif data == "deposit_rub":
+            await send_new_message(context, user_id, "💰 Выберите сумму для пополнения рублями:", KeyboardBuilder.deposit_rub_amounts())
         
-        elif data.startswith("deposit_"):
-            amount = int(data.replace("deposit_", ""))
-            
-            payload = json.dumps({"user_id": user_id, "type": "deposit", "amount": amount})
+        elif data == "deposit_stars":
+            await send_new_message(context, user_id, "⭐ Выберите количество звёзд для пополнения:", KeyboardBuilder.deposit_stars_amounts())
+        
+        elif data.startswith("rub_"):
+            amount = int(data.replace("rub_", ""))
+            payload = json.dumps({"user_id": user_id, "type": "deposit_rub", "amount": amount})
             invoice = await crypto.create_invoice(amount, payload)
             
             if invoice:
@@ -1713,20 +1841,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text, 
                     InlineKeyboardMarkup([
                         [InlineKeyboardButton("💳 ОПЛАТИТЬ", url=invoice["bot_invoice_url"])],
-                        [InlineKeyboardButton("✅ Я ОПЛАТИЛ", callback_data=f"check_deposit_{invoice['invoice_id']}")],
+                        [InlineKeyboardButton("✅ Я ОПЛАТИЛ", callback_data=f"check_deposit_rub_{invoice['invoice_id']}")],
                         [InlineKeyboardButton("◀️ НАЗАД", callback_data="balance_menu")]
                     ])
                 )
             else:
                 await send_new_message(context, user_id, "❌ Ошибка создания счета", KeyboardBuilder.balance_menu())
         
-        elif data.startswith("check_deposit_"):
-            invoice_id = int(data.replace("check_deposit_", ""))
+        elif data.startswith("stars_"):
+            amount = int(data.replace("stars_", ""))
+            # Создаём счёт в звёздах через Telegram Payments
+            prices = [LabeledPrice(label="Пополнение звёзд", amount=amount)]
+            
+            await context.bot.send_invoice(
+                chat_id=user_id,
+                title="Пополнение звёздного баланса",
+                description=f"Пополнение на {amount} звёзд",
+                payload=f"stars_{user_id}_{amount}_{int(time.time())}",
+                provider_token="",  # Пустой для Stars
+                currency="XTR",
+                prices=prices
+            )
+        
+        elif data.startswith("check_deposit_rub_"):
+            invoice_id = int(data.replace("check_deposit_rub_", ""))
             if await crypto.check_payment(invoice_id):
                 payment = await db.fetch_one("SELECT * FROM crypto_payments WHERE invoice_id = ?", (invoice_id,))
                 if payment and payment["status"] == "pending":
                     amount = payment["amount_rub"]
-                    await UserManager.add_balance(user_id, amount, "Пополнение баланса")
+                    await UserManager.add_rub_balance(user_id, amount, "Пополнение баланса")
                     await UserManager.confirm_crypto_payment(invoice_id)
                     
                     await send_new_message(
@@ -1747,8 +1890,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 for t in transactions:
                     sign = "+" if t["type"] == "deposit" else "-"
+                    currency = "⭐" if t["currency"] == "STARS" else "₽"
                     date = datetime.fromisoformat(t["created_at"]).strftime("%d.%m %H:%M")
-                    text += f"{date} {sign}{abs(t['amount'])}₽ - {t['description']}\n"
+                    text += f"{date} {sign}{abs(t['amount'])}{currency} - {t['description']}\n"
             await send_new_message(context, user_id, text, KeyboardBuilder.back())
         
         # ===== ПРОФИЛЬ =====
@@ -1766,12 +1910,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                 
                 role_emoji = "👑" if role == "admin" else "🧪" if role == "tester" else "👤"
-                balance = user.get("balance", 0)
-                text = f"{role_emoji} <b>ПРОФИЛЬ</b>\n\n💰 Баланс: {balance}₽\n📊 Статус: {status}\n📅 До: {end_str}\n⏱ Осталось: {max(0, days)} дн.\n🆔 ID: <code>{user_id}</code>"
+                rub = user.get("balance", 0)
+                stars = user.get("stars_balance", 0)
+                text = f"{role_emoji} <b>ПРОФИЛЬ</b>\n\n⭐ Звёзд: {stars}\n💰 Рублей: {rub}₽\n📊 Статус: {status}\n📅 До: {end_str}\n⏱ Осталось: {max(0, days)} дн.\n🆔 ID: <code>{user_id}</code>"
                 
                 profile_photo = user.get("profile_photo") or await ContentManager.get_menu_photo("profile")
                 
-                # Клавиатура с балансом
                 profile_kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("💰 БАЛАНС", callback_data="balance_menu")],
                     [InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")],
@@ -1847,54 +1991,68 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ===== ОБРАБОТКА ТИКЕТОВ ИЗ ГРУППЫ =====
         elif data.startswith("ticket_reply_"):
             parts = data.split("_")
-            ticket_id = int(parts[2])
-            target_user = int(parts[3])
-            
-            context.user_data['replying_to_ticket'] = ticket_id
-            context.user_data['replying_to_user'] = target_user
-            
-            await query.edit_message_text(
-                f"✏️ Введите ответ для пользователя (ID: {target_user}):\n\n"
-                "Ваш ответ будет отправлен в личные сообщения.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("❌ ОТМЕНА", callback_data=f"ticket_cancel_{target_user}")
-                ]])
-            )
-            context.user_data['awaiting_ticket_reply'] = True
+            if len(parts) >= 4:
+                ticket_id = int(parts[2])
+                target_user = int(parts[3])
+                
+                context.user_data['replying_to_ticket'] = ticket_id
+                context.user_data['replying_to_user'] = target_user
+                
+                await query.edit_message_text(
+                    f"✏️ Введите ответ для пользователя (ID: {target_user}):\n\n"
+                    "Ваш ответ будет отправлен в личные сообщения.",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("❌ ОТМЕНА", callback_data=f"ticket_cancel_{target_user}")
+                    ]])
+                )
+                context.user_data['awaiting_ticket_reply'] = True
 
         elif data.startswith("ticket_ban_"):
-            target_user = int(data.split("_")[2])
-            await UserManager.ban_user(target_user)
-            await query.edit_message_text(
-                f"✅ Пользователь {target_user} забанен.",
-                reply_markup=None
-            )
-            
-            try:
-                await context.bot.send_message(
-                    chat_id=target_user,
-                    text="⛔ Вы были забанены администратором."
+            parts = data.split("_")
+            if len(parts) >= 3:
+                target_user = int(parts[2])
+                await UserManager.ban_user(target_user)
+                await query.edit_message_text(
+                    f"✅ Пользователь {target_user} забанен.",
+                    reply_markup=None
                 )
-            except:
-                pass
+                
+                try:
+                    await context.bot.send_message(
+                        chat_id=target_user,
+                        text="⛔ Вы были забанены администратором."
+                    )
+                except:
+                    pass
 
         elif data.startswith("ticket_close_"):
-            ticket_id = int(data.split("_")[2])
-            await UserManager.close_ticket(ticket_id, user_id)
-            await query.edit_message_text(
-                f"✅ Тикет #{ticket_id} закрыт.",
-                reply_markup=None
-            )
+            parts = data.split("_")
+            if len(parts) >= 3:
+                ticket_id = int(parts[2])
+                await UserManager.close_ticket(ticket_id, user_id)
+                await query.edit_message_text(
+                    f"✅ Тикет #{ticket_id} закрыт.",
+                    reply_markup=None
+                )
 
         elif data.startswith("ticket_give_"):
-            target_user = int(data.split("_")[2])
-            await query.edit_message_text(
-                f"🎁 Выберите услугу для пользователя {target_user}:",
-                reply_markup=KeyboardBuilder.ticket_give_menu(target_user)
-            )
+            parts = data.split("_")
+            if len(parts) >= 3 and parts[1] == "give":
+                target_user = int(parts[2])
+                await query.edit_message_text(
+                    f"🎁 Выберите услугу для пользователя {target_user}:",
+                    reply_markup=KeyboardBuilder.ticket_give_menu(target_user)
+                )
+            elif len(parts) >= 4:
+                target_user = int(parts[3])
+                await query.edit_message_text(
+                    f"🎁 Выберите услугу для пользователя {target_user}:",
+                    reply_markup=KeyboardBuilder.ticket_give_menu(target_user)
+                )
 
         elif data.startswith("ticket_give_vpn_"):
-            target_user = int(data.split("_")[3])
+            parts = data.split("_")
+            target_user = int(parts[3])
             new_date = await UserManager.give_service_subscription(target_user, "vpn", admin_give=True)
             await query.edit_message_text(
                 f"✅ Пользователю {target_user} выдана подписка VPN.\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
@@ -1909,7 +2067,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data.startswith("ticket_give_proxy_"):
-            target_user = int(data.split("_")[3])
+            parts = data.split("_")
+            target_user = int(parts[3])
             new_date = await UserManager.give_service_subscription(target_user, "proxy", admin_give=True)
             await query.edit_message_text(
                 f"✅ Пользователю {target_user} выдана подписка на Прокси TG.\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
@@ -1924,7 +2083,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data.startswith("ticket_give_antijammer_"):
-            target_user = int(data.split("_")[3])
+            parts = data.split("_")
+            target_user = int(parts[3])
             new_date = await UserManager.give_service_subscription(target_user, "antijammer", admin_give=True)
             await query.edit_message_text(
                 f"✅ Пользователю {target_user} выдана подписка на Антиглушилки.\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
@@ -1939,7 +2099,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
         elif data.startswith("ticket_give_website_"):
-            target_user = int(data.split("_")[3])
+            parts = data.split("_")
+            target_user = int(parts[3])
             new_date = await UserManager.give_service_subscription(target_user, "website", admin_give=True)
             await query.edit_message_text(
                 f"✅ Пользователю {target_user} выдана подписка на Доступ к сайтам.\n📅 Действует до: {new_date.strftime('%d.%m.%Y')}",
@@ -2035,7 +2196,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_stats" and is_admin:
             stats = await UserManager.get_stats()
             await send_new_message(context, user_id,
-                f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}\n🎁 Пробный: {stats['trial']}\n👑 Админы: {stats['admins']}\n🧪 Тестеры: {stats['testers']}\n💰 Всего баланс: {stats['total_balance']}₽\n📈 Конверсия: {stats['conversion']}%",
+                f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}\n🎁 Пробный: {stats['trial']}\n👑 Админы: {stats['admins']}\n🧪 Тестеры: {stats['testers']}\n💰 Всего рублей: {stats['total_balance']}₽\n⭐ Всего звёзд: {stats['total_stars']}\n📈 Конверсия: {stats['conversion']}%",
                 KeyboardBuilder.admin_panel())
         
         elif data == "tester_stats" and is_tester:
@@ -2043,7 +2204,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ok:
                 stats = await UserManager.get_stats()
                 await send_new_message(context, user_id,
-                    f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}\n💰 Всего баланс: {stats['total_balance']}₽",
+                    f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}\n💰 Всего рублей: {stats['total_balance']}₽\n⭐ Всего звёзд: {stats['total_stars']}",
                     KeyboardBuilder.tester_panel())
         
         # ===== ПРОСМОТР ПОЛЬЗОВАТЕЛЕЙ =====
@@ -2063,8 +2224,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target = await UserManager.get(target_id)
             if target:
                 sub = target.get("subscribe_until", "Нет")[:10] if target.get("subscribe_until") else "Нет"
-                balance = target.get("balance", 0)
-                text = f"👤 <b>ИНФОРМАЦИЯ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\n💰 Баланс: {balance}₽\nСтатус: {'🟢' if not target.get('banned') else '🔴'}"
+                rub = target.get("balance", 0)
+                stars = target.get("stars_balance", 0)
+                text = f"👤 <b>ИНФОРМАЦИЯ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\n💰 Баланс: {rub}₽ {stars}⭐\nСтатус: {'🟢' if not target.get('banned') else '🔴'}"
                 await send_new_message(context, user_id, text, KeyboardBuilder.back())
         
         # ===== ДЕЙСТВИЯ ТЕСТЕРА =====
@@ -2134,7 +2296,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for tid in config.TESTER_IDS:
                 u = await UserManager.get(tid)
                 if u:
-                    testers.append(f"• {u['first_name']} (@{u['username']}) - ID: {tid} | Баланс: {u.get('balance', 0)}₽")
+                    testers.append(f"• {u['first_name']} (@{u['username']}) - ID: {tid} | Баланс: {u.get('balance', 0)}₽ {u.get('stars_balance', 0)}⭐")
             await send_new_message(context, user_id, "👥 <b>ТЕСТЕРЫ</b>\n\n" + ("\n".join(testers) if testers else "Нет тестеров"), KeyboardBuilder.admin_panel())
         
         elif data == "admin_tester_add" and is_admin:
@@ -2162,11 +2324,102 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_plans" and is_admin:
             await send_new_message(context, user_id, "💰 <b>УПРАВЛЕНИЕ ТАРИФАМИ</b>", await KeyboardBuilder.admin_plans())
         
+        elif data.startswith("admin_service_plans_") and is_admin:
+            service_type = data.replace("admin_service_plans_", "")
+            services = await ContentManager.get_service_types()
+            service = services.get(service_type, {"name": "Услуга", "emoji": "📌"})
+            
+            plans = await ContentManager.get_plans_by_service(service_type)
+            
+            text = f"💰 <b>ТАРИФЫ ДЛЯ {service['emoji']} {service['name']}</b>\n\n"
+            
+            if plans:
+                for pid, plan in plans.items():
+                    text += f"{plan['emoji']} {plan['name']} - {plan['price_rub']}₽ / {plan['price_stars']}⭐ / {plan['days']} дн.\n"
+            else:
+                text += "Тарифов пока нет\n"
+            
+            text += "\nВыберите тариф для редактирования:"
+            
+            buttons = []
+            for pid, plan in plans.items():
+                buttons.append([InlineKeyboardButton(
+                    f"{plan['emoji']} {plan['name']}",
+                    callback_data=f"admin_edit_plan_{pid}"
+                )])
+            
+            buttons.append([InlineKeyboardButton("➕ ДОБАВИТЬ ТАРИФ", callback_data=f"admin_add_plan_{service_type}")])
+            buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_plans")])
+            
+            await send_new_message(context, user_id, text, InlineKeyboardMarkup(buttons))
+        
         elif data.startswith("admin_edit_plan_") and is_admin:
             pid = data.replace("admin_edit_plan_", "")
             p = await ContentManager.get_plan(pid)
             if p:
-                await send_new_message(context, user_id, f"💰 {p['name']}\n\nРедактирование:", KeyboardBuilder.admin_plan_edit(pid, p))
+                text = (
+                    f"💰 <b>РЕДАКТИРОВАНИЕ ТАРИФА</b>\n\n"
+                    f"ID: {pid}\n"
+                    f"Название: {p['name']}\n"
+                    f"Рубли: {p['price_rub']}₽\n"
+                    f"Звёзды: {p['price_stars']}⭐\n"
+                    f"Дней: {p['days']}\n"
+                    f"Эмодзи: {p['emoji']}\n"
+                    f"Описание: {p['description']}\n"
+                    f"Тип услуги: {p['service_type']}\n"
+                    f"Фото: {'есть' if p['photo_id'] else 'нет'}\n\n"
+                    f"Выберите что изменить:"
+                )
+                await send_new_message(
+                    context,
+                    user_id,
+                    text,
+                    KeyboardBuilder.admin_plan_edit(pid, p)
+                )
+            else:
+                await send_new_message(context, user_id, "❌ Тариф не найден", KeyboardBuilder.admin_panel())
+        
+        elif data.startswith("admin_plan_name_") and is_admin:
+            pid = data.replace("admin_plan_name_", "")
+            context.user_data['editing_plan'] = pid
+            context.user_data['editing_field'] = 'name'
+            await send_new_message(context, user_id, "📝 Введите новое название для тарифа:", KeyboardBuilder.back())
+        
+        elif data.startswith("admin_plan_price_rub_") and is_admin:
+            pid = data.replace("admin_plan_price_rub_", "")
+            context.user_data['editing_plan'] = pid
+            context.user_data['editing_field'] = 'price_rub'
+            await send_new_message(context, user_id, "💰 Введите новую цену в рублях:", KeyboardBuilder.back())
+        
+        elif data.startswith("admin_plan_price_stars_") and is_admin:
+            pid = data.replace("admin_plan_price_stars_", "")
+            context.user_data['editing_plan'] = pid
+            context.user_data['editing_field'] = 'price_stars'
+            await send_new_message(context, user_id, "⭐ Введите новую цену в звёздах:", KeyboardBuilder.back())
+        
+        elif data.startswith("admin_plan_days_") and is_admin:
+            pid = data.replace("admin_plan_days_", "")
+            context.user_data['editing_plan'] = pid
+            context.user_data['editing_field'] = 'days'
+            await send_new_message(context, user_id, "📅 Введите новое количество дней:", KeyboardBuilder.back())
+        
+        elif data.startswith("admin_plan_emoji_") and is_admin:
+            pid = data.replace("admin_plan_emoji_", "")
+            context.user_data['editing_plan'] = pid
+            context.user_data['editing_field'] = 'emoji'
+            await send_new_message(context, user_id, "🎨 Введите новый эмодзи:", KeyboardBuilder.back())
+        
+        elif data.startswith("admin_plan_desc_") and is_admin:
+            pid = data.replace("admin_plan_desc_", "")
+            context.user_data['editing_plan'] = pid
+            context.user_data['editing_field'] = 'description'
+            await send_new_message(context, user_id, "📋 Введите новое описание:", KeyboardBuilder.back())
+        
+        elif data.startswith("admin_plan_photo_") and is_admin:
+            pid = data.replace("admin_plan_photo_", "")
+            context.user_data['editing_plan'] = pid
+            context.user_data['editing_field'] = 'photo'
+            await send_new_message(context, user_id, "🖼️ Отправьте новое фото:", KeyboardBuilder.back())
         
         # ===== АДМИН: ПОЛЬЗОВАТЕЛИ =====
         elif data == "admin_users" and is_admin:
@@ -2183,16 +2436,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target = await UserManager.get(target_id)
             if target:
                 sub = target.get("subscribe_until", "Нет")[:10] if target.get("subscribe_until") else "Нет"
-                balance = target.get("balance", 0)
-                text = f"👤 <b>ПОЛЬЗОВАТЕЛЬ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\n💰 Баланс: {balance}₽\nСтатус: {'🔴 ЗАБАНЕН' if target.get('banned') else '🟢 АКТИВЕН'}"
+                rub = target.get("balance", 0)
+                stars = target.get("stars_balance", 0)
+                text = f"👤 <b>ПОЛЬЗОВАТЕЛЬ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\n💰 Рубли: {rub}₽\n⭐ Звёзды: {stars}\nСтатус: {'🔴 ЗАБАНЕН' if target.get('banned') else '🟢 АКТИВЕН'}"
                 await send_new_message(context, user_id, text, KeyboardBuilder.admin_user_actions(target_id, target.get('banned', False)))
         
-        # ===== АДМИН: ВЫДАТЬ БОНУС =====
-        elif data.startswith("admin_give_bonus_") and is_admin:
+        # ===== АДМИН: ВЫДАТЬ РУБЛИ =====
+        elif data.startswith("admin_give_rub_") and is_admin:
             target_id = int(data.split("_")[3])
-            context.user_data['admin_give_bonus_to'] = target_id
-            await send_new_message(context, user_id, f"💰 Введите сумму бонуса для пользователя {target_id}:", KeyboardBuilder.back())
-            context.user_data['awaiting_admin_bonus'] = True
+            context.user_data['admin_give_rub_to'] = target_id
+            await send_new_message(context, user_id, f"💰 Введите сумму рублей для пользователя {target_id}:", KeyboardBuilder.back())
+            context.user_data['awaiting_admin_rub'] = True
+        
+        # ===== АДМИН: ВЫДАТЬ ЗВЁЗДЫ =====
+        elif data.startswith("admin_give_stars_") and is_admin:
+            target_id = int(data.split("_")[3])
+            context.user_data['admin_give_stars_to'] = target_id
+            await send_new_message(context, user_id, f"⭐ Введите количество звёзд для пользователя {target_id}:", KeyboardBuilder.back())
+            context.user_data['awaiting_admin_stars'] = True
         
         # ===== АДМИН: БАН/РАЗБАН =====
         elif data.startswith("admin_ban_") and is_admin:
@@ -2215,8 +2476,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(parts) == 4:
                 plan_id = parts[2]
                 target_id = int(parts[3])
-                if plan_id in PLANS:
-                    plan = PLANS[plan_id]
+                plans = await ContentManager.get_all_plans()
+                if plan_id in plans:
+                    plan = plans[plan_id]
                     new_date = await UserManager.give_subscription(target_id, plan["days"], admin_give=True)
                     if new_date:
                         await send_new_message(context, target_id, f"🎉 Админ выдал {plan['name']} до {new_date.strftime('%d.%m.%Y')}")
@@ -2244,6 +2506,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Произошла ошибка", show_alert=True)
         except:
             pass
+
+# ==================== ОБРАБОТЧИК ПЛАТЕЖЕЙ ЗВЁЗДАМИ ====================
+
+async def pre_checkout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка предварительной проверки платежа"""
+    query = update.pre_checkout_query
+    await query.answer(ok=True)
+
+async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка успешного платежа звёздами"""
+    payment = update.message.successful_payment
+    payload = payment.invoice_payload
+    
+    if payload.startswith("stars_"):
+        parts = payload.split("_")
+        if len(parts) >= 3:
+            user_id = int(parts[1])
+            amount = int(parts[2])
+            
+            await UserManager.add_stars_balance(user_id, amount, "Пополнение звёздами")
+            
+            await update.message.reply_text(
+                f"✅ <b>Пополнение звёздами подтверждено!</b>\n\n⭐ Баланс пополнен на {amount} звёзд",
+                parse_mode=ParseMode.HTML
+            )
 
 # ==================== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ====================
 
@@ -2282,7 +2569,6 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_id = update.effective_chat.id
     role = await UserManager.get_role(user_id)
     
-    # Автоудаление сообщения пользователя
     asyncio.create_task(delete_user_message_later(context, chat_id, update.message.message_id))
     
     user = await UserManager.get(user_id)
@@ -2290,19 +2576,18 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("⛔ Доступ заблокирован")
         return
     
-    # Проверяем статус бота для не-админов
     if not await is_bot_enabled(user_id) and role != "admin":
         await update.message.reply_text(config.MAINTENANCE_MESSAGE, parse_mode=ParseMode.HTML)
         return
     
-    # Обработка выдачи бонуса админом
-    if context.user_data.get('awaiting_admin_bonus') and role == "admin":
-        target_id = context.user_data.get('admin_give_bonus_to')
+    # Обработка выдачи рублей админом
+    if context.user_data.get('awaiting_admin_rub') and role == "admin":
+        target_id = context.user_data.get('admin_give_rub_to')
         try:
             amount = int(text.strip())
             if amount > 0:
-                await UserManager.add_balance(target_id, amount, f"Бонус от администратора")
-                await send_new_message(context, user_id, f"✅ Бонус {amount}₽ выдан пользователю {target_id}", KeyboardBuilder.admin_panel())
+                await UserManager.add_rub_balance(target_id, amount, f"Бонус от администратора")
+                await send_new_message(context, user_id, f"✅ {amount}₽ выдано пользователю {target_id}", KeyboardBuilder.admin_panel())
                 try:
                     await context.bot.send_message(
                         chat_id=target_id,
@@ -2316,8 +2601,85 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         except ValueError:
             await send_new_message(context, user_id, "❌ Введите число", KeyboardBuilder.admin_panel())
         
-        context.user_data.pop('awaiting_admin_bonus', None)
-        context.user_data.pop('admin_give_bonus_to', None)
+        context.user_data.pop('awaiting_admin_rub', None)
+        context.user_data.pop('admin_give_rub_to', None)
+        return
+    
+    # Обработка выдачи звёзд админом
+    if context.user_data.get('awaiting_admin_stars') and role == "admin":
+        target_id = context.user_data.get('admin_give_stars_to')
+        try:
+            amount = int(text.strip())
+            if amount > 0:
+                await UserManager.add_stars_balance(target_id, amount, f"Бонус от администратора")
+                await send_new_message(context, user_id, f"✅ {amount}⭐ выдано пользователю {target_id}", KeyboardBuilder.admin_panel())
+                try:
+                    await context.bot.send_message(
+                        chat_id=target_id,
+                        text=f"🎉 Администратор выдал вам бонус {amount}⭐ звёзд!",
+                        parse_mode=ParseMode.HTML
+                    )
+                except:
+                    pass
+            else:
+                await send_new_message(context, user_id, "❌ Количество должно быть положительным", KeyboardBuilder.admin_panel())
+        except ValueError:
+            await send_new_message(context, user_id, "❌ Введите число", KeyboardBuilder.admin_panel())
+        
+        context.user_data.pop('awaiting_admin_stars', None)
+        context.user_data.pop('admin_give_stars_to', None)
+        return
+    
+    # Обработка редактирования тарифа (админ/тестер)
+    if context.user_data.get('editing_plan') and context.user_data.get('editing_field') and (role == "admin" or role == "tester"):
+        pid = context.user_data['editing_plan']
+        field = context.user_data['editing_field']
+        plan = await ContentManager.get_plan(pid)
+        if plan:
+            try:
+                if field == 'name':
+                    await db.execute("UPDATE plans SET name = ? WHERE id = ?", (text, pid))
+                elif field == 'price_rub':
+                    await db.execute("UPDATE plans SET price_rub = ? WHERE id = ?", (int(text), pid))
+                elif field == 'price_stars':
+                    await db.execute("UPDATE plans SET price_stars = ? WHERE id = ?", (int(text), pid))
+                elif field == 'days':
+                    await db.execute("UPDATE plans SET days = ? WHERE id = ?", (int(text), pid))
+                elif field == 'emoji':
+                    await db.execute("UPDATE plans SET emoji = ? WHERE id = ?", (text, pid))
+                elif field == 'description':
+                    await db.execute("UPDATE plans SET description = ? WHERE id = ?", (text, pid))
+                
+                await send_new_message(context, user_id, "✅ Тариф обновлён", KeyboardBuilder.admin_panel())
+            except Exception as e:
+                await send_new_message(context, user_id, f"❌ Ошибка: {e}", KeyboardBuilder.admin_panel())
+        
+        context.user_data.pop('editing_plan', None)
+        context.user_data.pop('editing_field', None)
+        return
+    
+    # Обработка редактирования услуги (админ/тестер)
+    if context.user_data.get('editing_service') and context.user_data.get('editing_field') and (role == "admin" or role == "tester"):
+        sid = context.user_data['editing_service']
+        field = context.user_data['editing_field']
+        service = await ContentManager.get_service_type(sid)
+        if service:
+            try:
+                if field == 'name':
+                    await db.execute("UPDATE service_types SET name = ? WHERE id = ?", (text, sid))
+                elif field == 'emoji':
+                    await db.execute("UPDATE service_types SET emoji = ? WHERE id = ?", (text, sid))
+                elif field == 'description':
+                    await db.execute("UPDATE service_types SET description = ? WHERE id = ?", (text, sid))
+                elif field == 'order':
+                    await db.execute("UPDATE service_types SET sort_order = ? WHERE id = ?", (int(text), sid))
+                
+                await send_new_message(context, user_id, "✅ Услуга обновлена", KeyboardBuilder.admin_panel())
+            except Exception as e:
+                await send_new_message(context, user_id, f"❌ Ошибка: {e}", KeyboardBuilder.admin_panel())
+        
+        context.user_data.pop('editing_service', None)
+        context.user_data.pop('editing_field', None)
         return
     
     # Обработка создания тикета
@@ -2326,10 +2688,8 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         del context.user_data['awaiting_ticket_message']
         del context.user_data['ticket_subject']
         
-        # Создаём тикет
         ticket_id = await UserManager.create_ticket(user_id, subject, text)
         
-        # Отправляем в группу
         user = await UserManager.get(user_id)
         user_info = f"👤 <b>Новый тикет #{ticket_id}</b>\n\n"
         user_info += f"🆔 ID: <code>{user_id}</code>\n"
@@ -2361,21 +2721,26 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         del context.user_data['replying_to_ticket']
         del context.user_data['replying_to_user']
         
-        # Отправляем ответ пользователю
         try:
             await context.bot.send_message(
                 chat_id=target_user,
                 text=f"📝 <b>Ответ администратора:</b>\n\n{text}",
                 parse_mode=ParseMode.HTML
             )
-            await query.answer("✅ Ответ отправлен", show_alert=True)
+            await update.message.reply_text("✅ Ответ отправлен")
         except Exception as e:
-            await query.answer("❌ Ошибка отправки", show_alert=True)
+            await update.message.reply_text(f"❌ Ошибка отправки: {e}")
         
-        await query.edit_message_text(
-            f"✅ Ответ отправлен пользователю {target_user}.",
-            reply_markup=None
-        )
+        # Обновляем сообщение в группе
+        try:
+            await context.bot.edit_message_text(
+                chat_id=config.TICKET_GROUP_ID,
+                message_id=update.message.reply_to_message.message_id if update.message.reply_to_message else None,
+                text=f"✅ Ответ отправлен пользователю {target_user}.",
+                reply_markup=None
+            )
+        except:
+            pass
         return
     
     # Обработка добавления тестера
@@ -2415,74 +2780,6 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await send_new_message(context, user_id, "📢 Подтвердите рассылку", KeyboardBuilder.admin_confirm_mailing())
         context.user_data.pop('awaiting_mailing', None)
         return
-    
-    # Обработка редактирования услуги
-    if context.user_data.get('editing_service') and context.user_data.get('editing_field') and (role == "admin" or role == "tester"):
-        sid = context.user_data['editing_service']
-        field = context.user_data['editing_field']
-        service = await ContentManager.get_service_type(sid)
-        if service:
-            update_data = {
-                "name": service["name"], "emoji": service["emoji"],
-                "description": service["description"], "icon": service["icon"],
-                "enabled": service["enabled"], "sort_order": service["sort_order"]
-            }
-            try:
-                if field == "name":
-                    update_data["name"] = text
-                elif field == "emoji":
-                    update_data["emoji"] = text
-                elif field == "desc":
-                    update_data["description"] = text
-                elif field == "order":
-                    update_data["sort_order"] = int(text)
-                
-                if await ContentManager.update_service_type(sid, update_data):
-                    await send_new_message(context, user_id, "✅ Обновлено", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
-                else:
-                    await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
-            except Exception as e:
-                logger.error(f"Ошибка: {e}")
-                await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
-        context.user_data.pop('editing_service', None)
-        context.user_data.pop('editing_field', None)
-        return
-    
-    # Обработка редактирования тарифа
-    if context.user_data.get('editing_plan') and context.user_data.get('editing_field') and (role == "admin" or role == "tester"):
-        pid = context.user_data['editing_plan']
-        field = context.user_data['editing_field']
-        plan = await ContentManager.get_plan(pid)
-        if plan:
-            update_data = {
-                "name": plan["name"], "days": plan["days"], "price": plan["price"],
-                "emoji": plan["emoji"], "description": plan["description"],
-                "photo_id": plan["photo_id"], "service_type": plan["service_type"]
-            }
-            try:
-                if field == "name":
-                    update_data["name"] = text
-                elif field == "price":
-                    update_data["price"] = int(text)
-                elif field == "days":
-                    update_data["days"] = int(text)
-                elif field == "emoji":
-                    update_data["emoji"] = text
-                elif field == "desc":
-                    update_data["description"] = text
-                
-                if await ContentManager.update_plan(pid, update_data):
-                    await send_new_message(context, user_id, "✅ Обновлено", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
-                else:
-                    await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
-            except ValueError:
-                await send_new_message(context, user_id, "❌ Неверный формат", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
-            except Exception as e:
-                logger.error(f"Ошибка: {e}")
-                await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
-        context.user_data.pop('editing_plan', None)
-        context.user_data.pop('editing_field', None)
-        return
 
 # ==================== ФУНКЦИЯ РАССЫЛКИ ====================
 
@@ -2518,7 +2815,7 @@ async def start_mailing(context: ContextTypes.DEFAULT_TYPE, admin_id: int, text:
 async def startup():
     global telegram_app
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК PLES VPN BOT v17.0 (С БАЛАНСОМ)")
+    logger.info("🚀 ЗАПУСК PLES VPN BOT v19.0 (СО ЗВЁЗДАМИ)")
     logger.info("=" * 60)
     
     await keep_alive.initialize()
@@ -2535,6 +2832,8 @@ async def startup():
     telegram_app = Application.builder().token(config.BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
+    telegram_app.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
+    telegram_app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     telegram_app.add_handler(MessageHandler(filters.PHOTO, text_message_handler))
     
@@ -2576,7 +2875,7 @@ async def webhook(request: Request):
 async def home():
     return {
         "status": "online", 
-        "version": "17.0",
+        "version": "19.0",
         "bot_enabled": config.BOT_ENABLED,
         "maintenance_mode": config.MAINTENANCE_MODE,
         "ticket_group": config.TICKET_GROUP_ID
@@ -2595,4 +2894,4 @@ async def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("ples_vpn_bot_balance:app", host="0.0.0.0", port=port)
+    uvicorn.run("ples_vpn_bot_stars:app", host="0.0.0.0", port=port)
