@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 ╔═══════════════════════════════════════════════════════════════╗
-║         🌟 PLES VPN BOT v8.0 - ИСПРАВЛЕННАЯ ВЕРСИЯ            ║
-║     QR-коды без Pillow • Роль тестера • Анти-сон              ║
+║         🌟 PLES VPN BOT v11.0 - ДВУХКОЛОНОЧНОЕ МЕНЮ           ║
+║     Красивое меню в 2 колонки • Удобная навигация             ║
+║     Режим техработ • Уведомления всем пользователям           ║
 ╚═══════════════════════════════════════════════════════════════╝
 """
 
@@ -87,6 +88,11 @@ class Config:
     TESTER_ACTION_WINDOW = 3600
     TESTER_DELETE_LIMIT = 5
     TESTER_DELETE_WINDOW = 86400
+    
+    # Флаги работы бота
+    BOT_ENABLED = True
+    MAINTENANCE_MODE = False
+    MAINTENANCE_MESSAGE = "🔧 <b>Ведутся технические работы</b>\n\nБот временно недоступен. Приносим извинения за неудобства.\nОриентировочное время окончания: скоро."
 
 config = Config()
 
@@ -357,7 +363,6 @@ class XUIManager:
             return f"Ошибка генерации конфига: {e}"
     
     def generate_qr_code(self, config_str: str) -> Optional[BytesIO]:
-        """Генерация QR-кода без Pillow"""
         try:
             img = qrcode.make(config_str, image_factory=PyPNGImage)
             bio = BytesIO()
@@ -479,6 +484,15 @@ class Database:
                         load INTEGER DEFAULT 0,
                         ping INTEGER DEFAULT 0,
                         enabled INTEGER DEFAULT 1
+                    )
+                ''')
+                
+                await db.execute('''
+                    CREATE TABLE IF NOT EXISTS maintenance_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        action TEXT,
+                        admin_id INTEGER,
+                        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
                 
@@ -758,6 +772,13 @@ class UserManager:
         return await db.fetch_all(
             "SELECT * FROM crypto_payments WHERE status = 'pending' AND datetime(created_at) > datetime('now', '-1 day')"
         )
+    
+    @staticmethod
+    async def log_maintenance(action: str, admin_id: int):
+        await db.execute(
+            "INSERT INTO maintenance_log (action, admin_id) VALUES (?, ?)",
+            (action, admin_id)
+        )
 
 # ==================== МЕНЕДЖЕР КОНТЕНТА ====================
 
@@ -933,87 +954,181 @@ async def check_tester_action(user_id: int, context: ContextTypes.DEFAULT_TYPE, 
     
     return False, "❌ Нет прав"
 
-# ==================== КЛАВИАТУРЫ ====================
+# ==================== ФУНКЦИЯ ПРОВЕРКИ СТАТУСА БОТА ====================
+
+async def is_bot_enabled(user_id: int) -> bool:
+    """Проверяет, включен ли бот для пользователя"""
+    role = await UserManager.get_role(user_id)
+    if role == "admin":
+        return True
+    if config.MAINTENANCE_MODE:
+        return False
+    return config.BOT_ENABLED
+
+# ==================== КЛАВИАТУРЫ (ДВУХКОЛОНОЧНЫЕ) ====================
 
 class KeyboardBuilder:
     @staticmethod
     async def main(role: str = "user"):
+        """Главное меню в 2 колонки"""
         services = await ContentManager.get_service_types()
-        buttons = []
-        for sid, service in services.items():
-            buttons.append([InlineKeyboardButton(
+        
+        # Создаем кнопки в две колонки
+        service_buttons = []
+        service_list = list(services.items())
+        
+        for i in range(0, len(service_list), 2):
+            row = []
+            # Первая кнопка
+            sid, service = service_list[i]
+            row.append(InlineKeyboardButton(
                 f"{service['icon']} {service['emoji']} {service['name']}",
                 callback_data=f"service_{sid}"
-            )])
+            ))
+            # Вторая кнопка (если есть)
+            if i + 1 < len(service_list):
+                sid2, service2 = service_list[i + 1]
+                row.append(InlineKeyboardButton(
+                    f"{service2['icon']} {service2['emoji']} {service2['name']}",
+                    callback_data=f"service_{sid2}"
+                ))
+            service_buttons.append(row)
         
-        buttons.append([InlineKeyboardButton("👤 ПРОФИЛЬ", callback_data="profile")])
-        buttons.append([InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")])
-        buttons.append([InlineKeyboardButton("📞 ПОДДЕРЖКА", callback_data="support")])
+        # Основные кнопки в две колонки
+        main_buttons = [
+            [
+                InlineKeyboardButton("👤 ПРОФИЛЬ", callback_data="profile"),
+                InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")
+            ],
+            [
+                InlineKeyboardButton("📞 ПОДДЕРЖКА", callback_data="support")
+            ]
+        ]
         
+        # Кнопка админ/тестер панели (на всю ширину)
         if role == "admin":
-            buttons.append([InlineKeyboardButton("⚙️ АДМИН ПАНЕЛЬ", callback_data="admin_menu")])
+            admin_buttons = [
+                [InlineKeyboardButton("⚙️ АДМИН ПАНЕЛЬ", callback_data="admin_menu")]
+            ]
         elif role == "tester":
-            buttons.append([InlineKeyboardButton("🧪 ТЕСТЕР ПАНЕЛЬ", callback_data="tester_menu")])
+            admin_buttons = [
+                [InlineKeyboardButton("🧪 ТЕСТЕР ПАНЕЛЬ", callback_data="tester_menu")]
+            ]
+        else:
+            admin_buttons = []
         
-        return InlineKeyboardMarkup(buttons)
+        # Собираем все вместе
+        all_buttons = service_buttons + main_buttons + admin_buttons
+        return InlineKeyboardMarkup(all_buttons)
     
     @staticmethod
     async def service_plans(service_type: str):
+        """Планы для услуги в 2 колонки"""
         plans = await ContentManager.get_plans_by_service(service_type)
+        
         buttons = []
-        for pid, plan in plans.items():
-            buttons.append([InlineKeyboardButton(
+        plan_list = list(plans.items())
+        
+        for i in range(0, len(plan_list), 2):
+            row = []
+            pid, plan = plan_list[i]
+            row.append(InlineKeyboardButton(
                 f"{plan['emoji']} {plan['name']} - {plan['price']}₽",
                 callback_data=f"buy_{pid}"
-            )])
+            ))
+            if i + 1 < len(plan_list):
+                pid2, plan2 = plan_list[i + 1]
+                row.append(InlineKeyboardButton(
+                    f"{plan2['emoji']} {plan2['name']} - {plan2['price']}₽",
+                    callback_data=f"buy_{pid2}"
+                ))
+            buttons.append(row)
+        
         buttons.append([InlineKeyboardButton("🎁 ПРОБНЫЙ ПЕРИОД 6 ДНЕЙ", callback_data="trial")])
         buttons.append([InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")])
+        
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
     async def servers():
+        """Серверы в 2 колонки"""
         servers = await ContentManager.get_servers()
+        
         buttons = []
-        for sid, server in servers.items():
+        server_list = list(servers.items())
+        
+        for i in range(0, len(server_list), 2):
+            row = []
+            sid, server = server_list[i]
             load = "🟢" if server["load"] < 30 else "🟡" if server["load"] < 60 else "🔴"
-            buttons.append([InlineKeyboardButton(
+            row.append(InlineKeyboardButton(
                 f"{server['flag']} {server['name']} • {load} {server['load']}% • {server['ping']}ms",
                 callback_data=f"server_{sid}"
-            )])
+            ))
+            if i + 1 < len(server_list):
+                sid2, server2 = server_list[i + 1]
+                load2 = "🟢" if server2["load"] < 30 else "🟡" if server2["load"] < 60 else "🔴"
+                row.append(InlineKeyboardButton(
+                    f"{server2['flag']} {server2['name']} • {load2} {server2['load']}% • {server2['ping']}ms",
+                    callback_data=f"server_{sid2}"
+                ))
+            buttons.append(row)
+        
         buttons.append([InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")])
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
     def protocols():
+        """Протоколы в 2 колонки"""
+        protocols = PROTOCOLS
         buttons = []
-        for protocol in PROTOCOLS:
-            buttons.append([InlineKeyboardButton(f"🔒 {protocol}", callback_data=f"protocol_{protocol}")])
+        
+        for i in range(0, len(protocols), 2):
+            row = []
+            row.append(InlineKeyboardButton(f"🔒 {protocols[i]}", callback_data=f"protocol_{protocols[i]}"))
+            if i + 1 < len(protocols):
+                row.append(InlineKeyboardButton(f"🔒 {protocols[i + 1]}", callback_data=f"protocol_{protocols[i + 1]}"))
+            buttons.append(row)
+        
         buttons.append([InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")])
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
     def devices():
+        """Устройства в 2 колонки"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📱 ANDROID", callback_data="device_android")],
-            [InlineKeyboardButton("🍏 IOS", callback_data="device_ios")],
-            [InlineKeyboardButton("💻 WINDOWS", callback_data="device_windows")],
-            [InlineKeyboardButton("🍎 MACOS", callback_data="device_macos")],
-            [InlineKeyboardButton("🐧 LINUX", callback_data="device_linux")],
+            [
+                InlineKeyboardButton("📱 ANDROID", callback_data="device_android"),
+                InlineKeyboardButton("🍏 IOS", callback_data="device_ios")
+            ],
+            [
+                InlineKeyboardButton("💻 WINDOWS", callback_data="device_windows"),
+                InlineKeyboardButton("🍎 MACOS", callback_data="device_macos")
+            ],
+            [
+                InlineKeyboardButton("🐧 LINUX", callback_data="device_linux")
+            ],
             [InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")]
         ])
     
     @staticmethod
     def subscription():
+        """Управление подпиской в 2 колонки"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 ПРОДЛИТЬ", callback_data="get_access")],
-            [InlineKeyboardButton("📥 СКАЧАТЬ КОНФИГ", callback_data="download_config")],
-            [InlineKeyboardButton("🌍 СМЕНИТЬ СЕРВЕР", callback_data="select_server")],
-            [InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")],
+            [
+                InlineKeyboardButton("🔄 ПРОДЛИТЬ", callback_data="get_access"),
+                InlineKeyboardButton("📥 КОНФИГ", callback_data="download_config")
+            ],
+            [
+                InlineKeyboardButton("🌍 СМЕНИТЬ СЕРВЕР", callback_data="select_server"),
+                InlineKeyboardButton("👥 РЕФЕРАЛЫ", callback_data="referrals")
+            ],
             [InlineKeyboardButton("◀️ НАЗАД", callback_data="back_main")]
         ])
     
     @staticmethod
     def referrals(referral_code: str):
+        """Реферальная система"""
         ref_link = f"https://t.me/{config.BOT_USERNAME}?start=ref_{referral_code}"
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("🔗 РЕФЕРАЛЬНАЯ ССЫЛКА", url=ref_link)],
@@ -1031,58 +1146,119 @@ class KeyboardBuilder:
     
     @staticmethod
     def admin_panel():
+        """Админ панель в 2 колонки"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("👥 ПОЛЬЗОВАТЕЛИ", callback_data="admin_users")],
-            [InlineKeyboardButton("📊 СТАТИСТИКА", callback_data="admin_stats")],
-            [InlineKeyboardButton("📢 РАССЫЛКА", callback_data="admin_mailing")],
-            [InlineKeyboardButton("📝 ТЕКСТ ПРИВЕТСТВИЯ", callback_data="admin_edit_welcome")],
-            [InlineKeyboardButton("🏷️ УПРАВЛЕНИЕ УСЛУГАМИ", callback_data="admin_services")],
-            [InlineKeyboardButton("💰 УПРАВЛЕНИЕ ТАРИФАМИ", callback_data="admin_plans")],
-            [InlineKeyboardButton("🧪 УПРАВЛЕНИЕ ТЕСТЕРАМИ", callback_data="admin_testers")],
+            [
+                InlineKeyboardButton("👥 ПОЛЬЗОВАТЕЛИ", callback_data="admin_users"),
+                InlineKeyboardButton("📊 СТАТИСТИКА", callback_data="admin_stats")
+            ],
+            [
+                InlineKeyboardButton("📢 РАССЫЛКА", callback_data="admin_mailing"),
+                InlineKeyboardButton("📝 ТЕКСТ", callback_data="admin_edit_welcome")
+            ],
+            [
+                InlineKeyboardButton("🏷️ УСЛУГИ", callback_data="admin_services"),
+                InlineKeyboardButton("💰 ТАРИФЫ", callback_data="admin_plans")
+            ],
+            [
+                InlineKeyboardButton("🧪 ТЕСТЕРЫ", callback_data="admin_testers"),
+                InlineKeyboardButton("⚡ УПРАВЛЕНИЕ", callback_data="admin_bot_control")
+            ],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="back_main")]
         ])
     
     @staticmethod
-    def tester_panel():
+    def bot_control():
+        """Управление ботом в 2 колонки"""
+        status = "🟢 ВКЛЮЧЕН" if config.BOT_ENABLED and not config.MAINTENANCE_MODE else "🔴 ВЫКЛЮЧЕН"
+        maintenance_status = "🔧 ВКЛЮЧЕН" if config.MAINTENANCE_MODE else "✅ ВЫКЛЮЧЕН"
+        
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📊 ПРОСМОТР СТАТИСТИКИ", callback_data="tester_stats")],
-            [InlineKeyboardButton("🏷️ УПРАВЛЕНИЕ УСЛУГАМИ", callback_data="tester_services")],
-            [InlineKeyboardButton("💰 УПРАВЛЕНИЕ ТАРИФАМИ", callback_data="tester_plans")],
-            [InlineKeyboardButton("👥 ПРОСМОТР ПОЛЬЗОВАТЕЛЕЙ", callback_data="tester_users")],
-            [InlineKeyboardButton("📝 МОИ ДЕЙСТВИЯ", callback_data="tester_actions")],
+            [InlineKeyboardButton(f"🤖 СТАТУС: {status}", callback_data="admin_bot_status")],
+            [
+                InlineKeyboardButton("🟢 ВКЛЮЧИТЬ", callback_data="admin_bot_enable"),
+                InlineKeyboardButton("🔴 ВЫКЛЮЧИТЬ", callback_data="admin_bot_disable")
+            ],
+            [
+                InlineKeyboardButton("🔧 ТЕХРАБОТЫ ВКЛ", callback_data="admin_maintenance_on"),
+                InlineKeyboardButton("✅ ТЕХРАБОТЫ ВЫКЛ", callback_data="admin_maintenance_off")
+            ],
+            [InlineKeyboardButton(f"📢 СТАТУС ТЕХРАБОТ: {maintenance_status}", callback_data="admin_maintenance_status")],
+            [InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")]
+        ])
+    
+    @staticmethod
+    def tester_panel():
+        """Тестер панель в 2 колонки"""
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📊 СТАТИСТИКА", callback_data="tester_stats"),
+                InlineKeyboardButton("👥 ПОЛЬЗОВАТЕЛИ", callback_data="tester_users")
+            ],
+            [
+                InlineKeyboardButton("🏷️ УСЛУГИ", callback_data="tester_services"),
+                InlineKeyboardButton("💰 ТАРИФЫ", callback_data="tester_plans")
+            ],
+            [
+                InlineKeyboardButton("📝 МОИ ДЕЙСТВИЯ", callback_data="tester_actions")
+            ],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="back_main")]
         ])
     
     @staticmethod
     def admin_testers():
+        """Управление тестерами в 2 колонки"""
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("👥 СПИСОК ТЕСТЕРОВ", callback_data="admin_tester_list")],
-            [InlineKeyboardButton("➕ ДОБАВИТЬ ТЕСТЕРА", callback_data="admin_tester_add")],
-            [InlineKeyboardButton("❌ УДАЛИТЬ ТЕСТЕРА", callback_data="admin_tester_remove")],
-            [InlineKeyboardButton("📊 СТАТИСТИКА ТЕСТЕРОВ", callback_data="admin_tester_stats")],
+            [
+                InlineKeyboardButton("👥 СПИСОК", callback_data="admin_tester_list"),
+                InlineKeyboardButton("➕ ДОБАВИТЬ", callback_data="admin_tester_add")
+            ],
+            [
+                InlineKeyboardButton("❌ УДАЛИТЬ", callback_data="admin_tester_remove"),
+                InlineKeyboardButton("📊 СТАТИСТИКА", callback_data="admin_tester_stats")
+            ],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")]
         ])
     
     @staticmethod
     async def admin_services():
+        """Управление услугами в 2 колонки"""
         services = await ContentManager.get_service_types()
+        
         buttons = []
-        for sid, service in services.items():
-            buttons.append([InlineKeyboardButton(
+        service_list = list(services.items())
+        
+        for i in range(0, len(service_list), 2):
+            row = []
+            sid, service = service_list[i]
+            row.append(InlineKeyboardButton(
                 f"{service['icon']} {service['emoji']} {service['name']}",
                 callback_data=f"admin_edit_service_{sid}"
-            )])
+            ))
+            if i + 1 < len(service_list):
+                sid2, service2 = service_list[i + 1]
+                row.append(InlineKeyboardButton(
+                    f"{service2['icon']} {service2['emoji']} {service2['name']}",
+                    callback_data=f"admin_edit_service_{sid2}"
+                ))
+            buttons.append(row)
+        
         buttons.append([InlineKeyboardButton("➕ ДОБАВИТЬ УСЛУГУ", callback_data="admin_add_service")])
         buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")])
+        
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
     def admin_service_edit(service_id: str, service: Dict):
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"admin_service_name_{service_id}")],
-            [InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"admin_service_emoji_{service_id}")],
-            [InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"admin_service_desc_{service_id}")],
-            [InlineKeyboardButton("🔢 ПОРЯДОК", callback_data=f"admin_service_order_{service_id}")],
+            [
+                InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"admin_service_name_{service_id}"),
+                InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"admin_service_emoji_{service_id}")
+            ],
+            [
+                InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"admin_service_desc_{service_id}"),
+                InlineKeyboardButton("🔢 ПОРЯДОК", callback_data=f"admin_service_order_{service_id}")
+            ],
             [InlineKeyboardButton("❌ УДАЛИТЬ", callback_data=f"admin_service_delete_{service_id}")],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_services")]
         ])
@@ -1090,44 +1266,71 @@ class KeyboardBuilder:
     @staticmethod
     def tester_service_edit(service_id: str, service: Dict):
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"tester_service_name_{service_id}")],
-            [InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"tester_service_emoji_{service_id}")],
+            [
+                InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"tester_service_name_{service_id}"),
+                InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"tester_service_emoji_{service_id}")
+            ],
             [InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"tester_service_desc_{service_id}")],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="tester_services")]
         ])
     
     @staticmethod
     async def admin_plans():
+        """Управление тарифами в 2 колонки"""
         services = await ContentManager.get_service_types()
+        
         buttons = []
-        for sid, service in services.items():
-            buttons.append([InlineKeyboardButton(
+        service_list = list(services.items())
+        
+        for i in range(0, len(service_list), 2):
+            row = []
+            sid, service = service_list[i]
+            row.append(InlineKeyboardButton(
                 f"📌 {service['emoji']} {service['name']}",
                 callback_data=f"admin_service_plans_{sid}"
-            )])
+            ))
+            if i + 1 < len(service_list):
+                sid2, service2 = service_list[i + 1]
+                row.append(InlineKeyboardButton(
+                    f"📌 {service2['emoji']} {service2['name']}",
+                    callback_data=f"admin_service_plans_{sid2}"
+                ))
+            buttons.append(row)
+        
         buttons.append([InlineKeyboardButton("➕ ДОБАВИТЬ ТАРИФ", callback_data="admin_add_plan")])
         buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")])
+        
         return InlineKeyboardMarkup(buttons)
     
     @staticmethod
     def admin_plan_edit(plan_id: str, plan: Dict):
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"admin_plan_name_{plan_id}")],
-            [InlineKeyboardButton("💰 ЦЕНА", callback_data=f"admin_plan_price_{plan_id}")],
-            [InlineKeyboardButton("📅 ДНИ", callback_data=f"admin_plan_days_{plan_id}")],
-            [InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"admin_plan_emoji_{plan_id}")],
-            [InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"admin_plan_desc_{plan_id}")],
-            [InlineKeyboardButton("🖼️ ФОТО", callback_data=f"admin_plan_photo_{plan_id}")],
+            [
+                InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"admin_plan_name_{plan_id}"),
+                InlineKeyboardButton("💰 ЦЕНА", callback_data=f"admin_plan_price_{plan_id}")
+            ],
+            [
+                InlineKeyboardButton("📅 ДНИ", callback_data=f"admin_plan_days_{plan_id}"),
+                InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"admin_plan_emoji_{plan_id}")
+            ],
+            [
+                InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"admin_plan_desc_{plan_id}"),
+                InlineKeyboardButton("🖼️ ФОТО", callback_data=f"admin_plan_photo_{plan_id}")
+            ],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_plans")]
         ])
     
     @staticmethod
     def tester_plan_edit(plan_id: str, plan: Dict):
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"tester_plan_name_{plan_id}")],
-            [InlineKeyboardButton("💰 ЦЕНА", callback_data=f"tester_plan_price_{plan_id}")],
-            [InlineKeyboardButton("📅 ДНИ", callback_data=f"tester_plan_days_{plan_id}")],
-            [InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"tester_plan_emoji_{plan_id}")],
+            [
+                InlineKeyboardButton("📝 НАЗВАНИЕ", callback_data=f"tester_plan_name_{plan_id}"),
+                InlineKeyboardButton("💰 ЦЕНА", callback_data=f"tester_plan_price_{plan_id}")
+            ],
+            [
+                InlineKeyboardButton("📅 ДНИ", callback_data=f"tester_plan_days_{plan_id}"),
+                InlineKeyboardButton("🎨 ЭМОДЗИ", callback_data=f"tester_plan_emoji_{plan_id}")
+            ],
             [InlineKeyboardButton("📋 ОПИСАНИЕ", callback_data=f"tester_plan_desc_{plan_id}")],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="tester_plans")]
         ])
@@ -1135,76 +1338,92 @@ class KeyboardBuilder:
     @staticmethod
     def admin_users(users: List[Dict], page: int = 0):
         buttons = []
-        start = page * 5
-        end = start + 5
+        start = page * 6
+        end = start + 6
         
-        for user in users[start:end]:
-            name = user.get('first_name', '—')[:10]
+        rows = []
+        current_row = []
+        
+        for i, user in enumerate(users[start:end]):
+            name = user.get('first_name', '—')[:8]
             role_emoji = {"admin": "👑", "tester": "🧪", "user": "👤"}.get(user.get('role'), "👤")
             status = "🔴" if user.get('banned') else "🟢"
             sub = "✅" if user.get('subscribe_until') and datetime.fromisoformat(user['subscribe_until']) > datetime.now() else "❌"
-            buttons.append([InlineKeyboardButton(
-                f"{role_emoji}{status}{sub} {name} (@{user.get('username', '—')})",
-                callback_data=f"admin_user_{user['user_id']}"
-            )])
+            btn_text = f"{role_emoji}{status}{sub} {name}"
+            
+            current_row.append(InlineKeyboardButton(btn_text, callback_data=f"admin_user_{user['user_id']}"))
+            
+            if len(current_row) == 2 or i == min(5, len(users[start:end]) - 1):
+                rows.append(current_row)
+                current_row = []
         
-        nav = []
+        # Навигация
+        nav_row = []
         if page > 0:
-            nav.append(InlineKeyboardButton("◀️", callback_data=f"admin_users_page_{page-1}"))
+            nav_row.append(InlineKeyboardButton("◀️", callback_data=f"admin_users_page_{page-1}"))
         if end < len(users):
-            nav.append(InlineKeyboardButton("▶️", callback_data=f"admin_users_page_{page+1}"))
-        if nav:
-            buttons.append(nav)
+            nav_row.append(InlineKeyboardButton("▶️", callback_data=f"admin_users_page_{page+1}"))
+        if nav_row:
+            rows.append(nav_row)
         
-        buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")])
-        return InlineKeyboardMarkup(buttons)
+        rows.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_menu")])
+        return InlineKeyboardMarkup(rows)
     
     @staticmethod
     def tester_users(users: List[Dict], page: int = 0):
         buttons = []
-        start = page * 5
-        end = start + 5
+        start = page * 6
+        end = start + 6
         
-        for user in users[start:end]:
-            name = user.get('first_name', '—')[:10]
+        rows = []
+        current_row = []
+        
+        for i, user in enumerate(users[start:end]):
+            name = user.get('first_name', '—')[:8]
             status = "🟢" if not user.get('banned') else "🔴"
             sub = "✅" if user.get('subscribe_until') and datetime.fromisoformat(user['subscribe_until']) > datetime.now() else "❌"
-            buttons.append([InlineKeyboardButton(
-                f"{status}{sub} {name} (@{user.get('username', '—')})",
-                callback_data=f"tester_view_user_{user['user_id']}"
-            )])
+            btn_text = f"{status}{sub} {name}"
+            
+            current_row.append(InlineKeyboardButton(btn_text, callback_data=f"tester_view_user_{user['user_id']}"))
+            
+            if len(current_row) == 2 or i == min(5, len(users[start:end]) - 1):
+                rows.append(current_row)
+                current_row = []
         
-        nav = []
+        # Навигация
+        nav_row = []
         if page > 0:
-            nav.append(InlineKeyboardButton("◀️", callback_data=f"tester_users_page_{page-1}"))
+            nav_row.append(InlineKeyboardButton("◀️", callback_data=f"tester_users_page_{page-1}"))
         if end < len(users):
-            nav.append(InlineKeyboardButton("▶️", callback_data=f"tester_users_page_{page+1}"))
-        if nav:
-            buttons.append(nav)
+            nav_row.append(InlineKeyboardButton("▶️", callback_data=f"tester_users_page_{page+1}"))
+        if nav_row:
+            rows.append(nav_row)
         
-        buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="tester_menu")])
-        return InlineKeyboardMarkup(buttons)
+        rows.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="tester_menu")])
+        return InlineKeyboardMarkup(rows)
     
     @staticmethod
     def admin_user_actions(user_id: int, is_banned: bool):
-        buttons = [
+        return InlineKeyboardMarkup([
             [InlineKeyboardButton("📅 ВЫДАТЬ ПОДПИСКУ", callback_data=f"admin_give_{user_id}")],
             [InlineKeyboardButton("🔒 ЗАБАНИТЬ" if not is_banned else "🔓 РАЗБАНИТЬ",
                                  callback_data=f"admin_ban_{user_id}" if not is_banned else f"admin_unban_{user_id}")],
             [InlineKeyboardButton("🔙 НАЗАД", callback_data="admin_users")]
-        ]
-        return InlineKeyboardMarkup(buttons)
+        ])
     
     @staticmethod
     def admin_give_sub(user_id: int):
-        buttons = []
-        for pid, plan in PLANS.items():
-            buttons.append([InlineKeyboardButton(
-                f"{plan['name']} - {plan['days']} дней",
-                callback_data=f"admin_give_{pid}_{user_id}"
-            )])
-        buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data=f"admin_user_{user_id}")])
-        return InlineKeyboardMarkup(buttons)
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🌱 1 мес", callback_data=f"admin_give_1month_{user_id}"),
+                InlineKeyboardButton("🌿 3 мес", callback_data=f"admin_give_3month_{user_id}")
+            ],
+            [
+                InlineKeyboardButton("🌳 6 мес", callback_data=f"admin_give_6month_{user_id}"),
+                InlineKeyboardButton("🏝️ 12 мес", callback_data=f"admin_give_12month_{user_id}")
+            ],
+            [InlineKeyboardButton("🔙 НАЗАД", callback_data=f"admin_user_{user_id}")]
+        ])
     
     @staticmethod
     def admin_confirm_mailing():
@@ -1223,12 +1442,42 @@ app = FastAPI()
 telegram_app = None
 startup_time = time.time()
 
+# ==================== ФУНКЦИЯ РАССЫЛКИ УВЕДОМЛЕНИЙ ====================
+
+async def notify_maintenance(context: ContextTypes.DEFAULT_TYPE, message: str):
+    """Отправляет уведомление о техработах всем пользователям"""
+    users = await UserManager.get_all_users()
+    total = len(users)
+    sent = 0
+    
+    logger.info(f"📢 Отправка уведомления о техработах {total} пользователям")
+    
+    for user in users:
+        if user.get("banned"):
+            continue
+        try:
+            await context.bot.send_message(
+                chat_id=user["user_id"],
+                text=message,
+                parse_mode=ParseMode.HTML
+            )
+            sent += 1
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.error(f"Ошибка отправки уведомления пользователю {user['user_id']}: {e}")
+    
+    logger.info(f"✅ Уведомление отправлено {sent} пользователям")
+    return sent
+
 # ==================== ФОНОВАЯ ПРОВЕРКА ПЛАТЕЖЕЙ ====================
 
 async def check_pending_payments():
     while True:
         try:
             await asyncio.sleep(30)
+            if not config.BOT_ENABLED or config.MAINTENANCE_MODE:
+                continue
+                
             pending = await UserManager.get_pending_payments()
             for payment in pending:
                 if await crypto.check_payment(payment["invoice_id"]):
@@ -1261,6 +1510,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user = update.effective_user
         args = context.args
+        user_id = user.id
+        
+        # Проверяем статус бота
+        if not await is_bot_enabled(user_id):
+            await update.message.reply_text(config.MAINTENANCE_MESSAGE, parse_mode=ParseMode.HTML)
+            return
         
         referred_by = None
         if args and args[0].startswith("ref_"):
@@ -1289,24 +1544,37 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         data = query.data
         user_id = query.from_user.id
+        
+        # Проверяем статус бота (кроме админских кнопок)
+        if not data.startswith("admin_") and not data.startswith("back_main"):
+            if not await is_bot_enabled(user_id):
+                await send_new_message(context, user_id, config.MAINTENANCE_MESSAGE, None)
+                return
+        
         role = await UserManager.get_role(user_id)
         is_admin = role == "admin"
         is_tester = role == "tester"
         
+        logger.info(f"🔘 Кнопка: {data} от {user_id} (роль: {role})")
+        
+        # ===== НАВИГАЦИЯ =====
         if data == "back_main":
             await send_new_message(context, user_id, "🏠 Главное меню", await KeyboardBuilder.main(role))
         
+        # ===== УСЛУГИ =====
         elif data.startswith("service_"):
             service_id = data.replace("service_", "")
             services = await ContentManager.get_service_types()
-            service = services.get(service_id, {"name": "Услуга", "description": ""})
-            text = f"{service.get('icon')} {service.get('emoji')} <b>{service['name']}</b>\n\n{service.get('description')}\n\nВыберите тариф:"
+            service = services.get(service_id, {"name": "Услуга", "description": "", "icon": "🔹", "emoji": "📌"})
+            text = f"{service.get('icon', '🔹')} {service.get('emoji', '📌')} <b>{service['name']}</b>\n\n{service.get('description', '')}\n\nВыберите тариф:"
             await send_new_message(context, user_id, text, await KeyboardBuilder.service_plans(service_id))
         
+        # ===== ПРОБНЫЙ ПЕРИОД =====
         elif data == "trial":
             ok, msg = await UserManager.activate_trial(user_id)
             await send_new_message(context, user_id, msg, await KeyboardBuilder.main(role))
         
+        # ===== ПОКУПКА =====
         elif data.startswith("buy_"):
             plan_id = data.replace("buy_", "")
             plans = await ContentManager.get_all_plans()
@@ -1324,6 +1592,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await send_new_message(context, user_id, "❌ Тариф не найден", await KeyboardBuilder.main(role))
         
+        # ===== ПРОВЕРКА ОПЛАТЫ =====
         elif data.startswith("check_crypto_"):
             invoice_id = int(data.replace("check_crypto_", ""))
             if await crypto.check_payment(invoice_id):
@@ -1348,8 +1617,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             await send_new_message(context, user_id, f"❌ {msg}", await KeyboardBuilder.main(role))
                 await query.answer("✅ Платеж найден!", show_alert=True)
             else:
-                await query.answer("❌ Платеж не найден", show_alert=True)
+                await query.answer("❌ Платеж не найден. Если вы оплатили, подождите минуту.", show_alert=True)
         
+        # ===== ПРОФИЛЬ =====
         elif data == "profile":
             user = await UserManager.get(user_id)
             if user:
@@ -1363,7 +1633,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
                 
-                text = f"{'👑' if role=='admin' else '🧪' if role=='tester' else '👤'} <b>ПРОФИЛЬ</b>\n\n📊 Статус: {status}\n📅 До: {end_str}\n⏱ Осталось: {max(0, days)} дн.\n🆔 ID: <code>{user_id}</code>"
+                role_emoji = "👑" if role == "admin" else "🧪" if role == "tester" else "👤"
+                text = f"{role_emoji} <b>ПРОФИЛЬ</b>\n\n📊 Статус: {status}\n📅 До: {end_str}\n⏱ Осталось: {max(0, days)} дн.\n🆔 ID: <code>{user_id}</code>"
+                
                 if user.get("vpn_config") and days > 0:
                     text += f"\n\n🔗 <b>Конфиг:</b> {user['vpn_config'][:50]}..."
                     kb = KeyboardBuilder.back()
@@ -1372,6 +1644,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await send_new_message(context, user_id, text, KeyboardBuilder.back())
         
+        # ===== ПОКАЗАТЬ КОНФИГ =====
         elif data == "show_config":
             user = await UserManager.get(user_id)
             if user and user.get("vpn_config") and user.get("subscribe_until"):
@@ -1384,8 +1657,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         return
                 except:
                     pass
-            await query.answer("❌ Конфиг не найден", show_alert=True)
+            await query.answer("❌ Конфиг не найден или подписка не активна", show_alert=True)
         
+        # ===== РЕФЕРАЛЫ =====
         elif data == "referrals":
             user = await UserManager.get(user_id)
             if user:
@@ -1394,6 +1668,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = f"👥 <b>РЕФЕРАЛЫ</b>\n\nВаш ID: <code>{user_id}</code>\nПриглашено: {count}\n🎁 +{config.REFERRAL_BONUS_DAYS} дня за друга\n\n🔗 Ссылка:\n<code>https://t.me/{config.BOT_USERNAME}?start=ref_{user_id}</code>"
                 await send_new_message(context, user_id, text, KeyboardBuilder.referrals(str(user_id)))
         
+        # ===== СТАТИСТИКА РЕФЕРАЛОВ =====
         elif data == "referral_stats":
             user = await UserManager.get(user_id)
             if user:
@@ -1407,15 +1682,56 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         text += f"• {u.get('first_name', '—') if u else '—'} - {r['created_at'][:10]}\n"
                 await send_new_message(context, user_id, text, KeyboardBuilder.back())
         
+        # ===== ПОДДЕРЖКА =====
         elif data == "support":
             await send_new_message(context, user_id, "📞 <b>ПОДДЕРЖКА</b>\n\n@vpn_support_bot", KeyboardBuilder.back())
         
+        # ===== АДМИН ПАНЕЛЬ =====
         elif data == "admin_menu" and is_admin:
             await send_new_message(context, user_id, "⚙️ <b>АДМИН ПАНЕЛЬ</b>", KeyboardBuilder.admin_panel())
         
+        # ===== УПРАВЛЕНИЕ БОТОМ =====
+        elif data == "admin_bot_control" and is_admin:
+            await send_new_message(context, user_id, "⚡ <b>УПРАВЛЕНИЕ БОТОМ</b>", KeyboardBuilder.bot_control())
+        
+        elif data == "admin_bot_status" and is_admin:
+            status = "ВКЛЮЧЕН" if config.BOT_ENABLED else "ВЫКЛЮЧЕН"
+            maint = "ВКЛЮЧЕН" if config.MAINTENANCE_MODE else "ВЫКЛЮЧЕН"
+            await query.answer(f"🤖 Бот: {status}\n🔧 Техработы: {maint}", show_alert=True)
+        
+        elif data == "admin_bot_enable" and is_admin:
+            config.BOT_ENABLED = True
+            await UserManager.log_maintenance("bot_enable", user_id)
+            await send_new_message(context, user_id, "✅ Бот включен!", KeyboardBuilder.bot_control())
+        
+        elif data == "admin_bot_disable" and is_admin:
+            config.BOT_ENABLED = False
+            await UserManager.log_maintenance("bot_disable", user_id)
+            await send_new_message(context, user_id, "🔴 Бот выключен!", KeyboardBuilder.bot_control())
+        
+        elif data == "admin_maintenance_on" and is_admin:
+            config.MAINTENANCE_MODE = True
+            await UserManager.log_maintenance("maintenance_on", user_id)
+            # Отправляем уведомление всем пользователям
+            sent = await notify_maintenance(context, config.MAINTENANCE_MESSAGE)
+            await send_new_message(context, user_id, 
+                f"🔧 Режим техработ включен!\n📢 Уведомление отправлено {sent} пользователям.", 
+                KeyboardBuilder.bot_control())
+        
+        elif data == "admin_maintenance_off" and is_admin:
+            config.MAINTENANCE_MODE = False
+            await UserManager.log_maintenance("maintenance_off", user_id)
+            await send_new_message(context, user_id, "✅ Режим техработ выключен!", KeyboardBuilder.bot_control())
+        
+        elif data == "admin_maintenance_status" and is_admin:
+            status = "ВКЛЮЧЕН" if config.MAINTENANCE_MODE else "ВЫКЛЮЧЕН"
+            await query.answer(f"🔧 Режим техработ: {status}", show_alert=True)
+        
+        # ===== ТЕСТЕР ПАНЕЛЬ =====
         elif data == "tester_menu" and is_tester:
             await send_new_message(context, user_id, "🧪 <b>ТЕСТЕР ПАНЕЛЬ</b>", KeyboardBuilder.tester_panel())
         
+        # ===== СТАТИСТИКА =====
         elif data == "admin_stats" and is_admin:
             stats = await UserManager.get_stats()
             await send_new_message(context, user_id,
@@ -1430,6 +1746,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"📊 <b>СТАТИСТИКА</b>\n\n👥 Всего: {stats['total']}\n✅ Активных: {stats['active']}\n🔒 Забанено: {stats['banned']}",
                     KeyboardBuilder.tester_panel())
         
+        # ===== ПРОСМОТР ПОЛЬЗОВАТЕЛЕЙ =====
         elif data == "tester_users" and is_tester:
             ok, _ = await check_tester_action(user_id, context)
             if ok:
@@ -1441,6 +1758,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             users = await UserManager.get_all_users()
             await send_new_message(context, user_id, f"👥 Страница {page+1}:", KeyboardBuilder.tester_users(users, page))
         
+        elif data.startswith("tester_view_user_") and is_tester:
+            target_id = int(data.replace("tester_view_user_", ""))
+            target = await UserManager.get(target_id)
+            if target:
+                sub = target.get("subscribe_until", "Нет")[:10] if target.get("subscribe_until") else "Нет"
+                text = f"👤 <b>ИНФОРМАЦИЯ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\nСтатус: {'🟢' if not target.get('banned') else '🔴'}"
+                await send_new_message(context, user_id, text, KeyboardBuilder.back())
+        
+        # ===== ДЕЙСТВИЯ ТЕСТЕРА =====
         elif data == "tester_actions" and is_tester:
             actions = len(tester_monitor.actions[user_id])
             deletions = len(tester_monitor.deletions[user_id])
@@ -1448,29 +1774,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = f"📝 <b>ВАША АКТИВНОСТЬ</b>\n\n📊 Действий за час: {actions}/{config.TESTER_ACTION_LIMIT}\n🗑️ Удалений за день: {deletions}/{config.TESTER_DELETE_LIMIT}\n⚠️ Предупреждений: {warnings}/3"
             await send_new_message(context, user_id, text, KeyboardBuilder.tester_panel())
         
+        # ===== УПРАВЛЕНИЕ УСЛУГАМИ ТЕСТЕРАМИ =====
         elif data == "tester_services" and is_tester:
             ok, _ = await check_tester_action(user_id, context)
             if ok:
                 services = await ContentManager.get_service_types()
                 text = "🏷️ <b>УПРАВЛЕНИЕ УСЛУГАМИ</b>"
-                buttons = []
-                for sid, s in services.items():
-                    buttons.append([InlineKeyboardButton(f"{s['icon']} {s['emoji']} {s['name']}", callback_data=f"tester_edit_service_{sid}")])
-                buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="tester_menu")])
-                await send_new_message(context, user_id, text, InlineKeyboardMarkup(buttons))
-        
-        elif data == "tester_plans" and is_tester:
-            ok, _ = await check_tester_action(user_id, context)
-            if ok:
-                plans = await ContentManager.get_all_plans()
-                services = await ContentManager.get_service_types()
-                text = "💰 <b>УПРАВЛЕНИЕ ТАРИФАМИ</b>"
-                buttons = []
-                for pid, p in plans.items():
-                    svc = services.get(p['service_type'], {"emoji": "📌"})
-                    buttons.append([InlineKeyboardButton(f"{svc['emoji']} {p['emoji']} {p['name']}", callback_data=f"tester_edit_plan_{pid}")])
-                buttons.append([InlineKeyboardButton("🔙 НАЗАД", callback_data="tester_menu")])
-                await send_new_message(context, user_id, text, InlineKeyboardMarkup(buttons))
+                await send_new_message(context, user_id, text, await KeyboardBuilder.admin_services())
         
         elif data.startswith("tester_edit_service_") and is_tester:
             sid = data.replace("tester_edit_service_", "")
@@ -1478,66 +1788,43 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if s:
                 await send_new_message(context, user_id, f"🏷️ {s['name']}\n\nВыберите поле:", KeyboardBuilder.tester_service_edit(sid, s))
         
+        # ===== УПРАВЛЕНИЕ ТАРИФАМИ ТЕСТЕРАМИ =====
+        elif data == "tester_plans" and is_tester:
+            ok, _ = await check_tester_action(user_id, context)
+            if ok:
+                await send_new_message(context, user_id, "💰 <b>УПРАВЛЕНИЕ ТАРИФАМИ</b>", await KeyboardBuilder.admin_plans())
+        
         elif data.startswith("tester_edit_plan_") and is_tester:
             pid = data.replace("tester_edit_plan_", "")
             p = await ContentManager.get_plan(pid)
             if p:
                 await send_new_message(context, user_id, f"💰 {p['name']}\n\nВыберите поле:", KeyboardBuilder.tester_plan_edit(pid, p))
         
+        # ===== РЕДАКТИРОВАНИЕ ПОЛЕЙ ТЕСТЕРАМИ =====
         elif data.startswith("tester_service_") and is_tester:
             parts = data.split("_")
-            field = parts[2]
-            sid = parts[3]
-            context.user_data['editing_service'] = sid
-            context.user_data['editing_field'] = field
-            await send_new_message(context, user_id, f"📝 Введите новое значение для {field}:", KeyboardBuilder.back())
+            if len(parts) >= 4:
+                field = parts[2]
+                sid = parts[3]
+                context.user_data['editing_service'] = sid
+                context.user_data['editing_field'] = field
+                await send_new_message(context, user_id, f"📝 Введите новое значение для {field}:", KeyboardBuilder.back())
         
         elif data.startswith("tester_plan_") and is_tester:
             parts = data.split("_")
-            field = parts[2]
-            pid = parts[3]
-            action = "delete" if field == "delete" else "action"
-            ok, msg = await check_tester_action(user_id, context, action)
-            if ok:
-                context.user_data['editing_plan'] = pid
-                context.user_data['editing_field'] = field
-                await send_new_message(context, user_id, f"📝 Введите новое значение для {field}:", KeyboardBuilder.back())
-            else:
-                await send_new_message(context, user_id, msg, KeyboardBuilder.tester_panel())
-        
-        elif data.startswith("admin_") and is_admin:
-            parts = data.split("_")
-            if len(parts) > 2 and parts[1] == "service":
-                if parts[2] == "edit":
-                    sid = parts[3]
-                    s = await ContentManager.get_service_type(sid)
-                    if s:
-                        await send_new_message(context, user_id, f"🏷️ {s['name']}\n\nРедактирование:", KeyboardBuilder.admin_service_edit(sid, s))
-                elif parts[2] in ("name", "emoji", "desc", "order", "delete"):
-                    field = parts[2]
-                    sid = parts[3]
-                    context.user_data['editing_service'] = sid
-                    context.user_data['editing_field'] = field
-                    await send_new_message(context, user_id, f"📝 Введите новое значение:", KeyboardBuilder.back())
-            elif len(parts) > 2 and parts[1] == "plan":
-                if parts[2] == "edit":
-                    pid = parts[3]
-                    p = await ContentManager.get_plan(pid)
-                    if p:
-                        await send_new_message(context, user_id, f"💰 {p['name']}\n\nРедактирование:", KeyboardBuilder.admin_plan_edit(pid, p))
-                elif parts[2] in ("name", "price", "days", "emoji", "desc", "photo"):
-                    field = parts[2]
-                    pid = parts[3]
+            if len(parts) >= 4:
+                field = parts[2]
+                pid = parts[3]
+                action = "delete" if field == "delete" else "action"
+                ok, msg = await check_tester_action(user_id, context, action)
+                if ok:
                     context.user_data['editing_plan'] = pid
                     context.user_data['editing_field'] = field
-                    await send_new_message(context, user_id, f"📝 Введите новое значение:", KeyboardBuilder.back())
+                    await send_new_message(context, user_id, f"📝 Введите новое значение для {field}:", KeyboardBuilder.back())
+                else:
+                    await send_new_message(context, user_id, msg, KeyboardBuilder.tester_panel())
         
-        elif data == "admin_services" and is_admin:
-            await send_new_message(context, user_id, "🏷️ <b>УПРАВЛЕНИЕ УСЛУГАМИ</b>", await KeyboardBuilder.admin_services())
-        
-        elif data == "admin_plans" and is_admin:
-            await send_new_message(context, user_id, "💰 <b>УПРАВЛЕНИЕ ТАРИФАМИ</b>", await KeyboardBuilder.admin_plans())
-        
+        # ===== АДМИН: УПРАВЛЕНИЕ ТЕСТЕРАМИ =====
         elif data == "admin_testers" and is_admin:
             await send_new_message(context, user_id, "🧪 <b>УПРАВЛЕНИЕ ТЕСТЕРАМИ</b>", KeyboardBuilder.admin_testers())
         
@@ -1560,6 +1847,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "admin_tester_stats" and is_admin:
             await send_new_message(context, user_id, f"📊 Тестеров: {len(config.TESTER_IDS)}", KeyboardBuilder.admin_panel())
         
+        # ===== АДМИН: УПРАВЛЕНИЕ УСЛУГАМИ =====
+        elif data == "admin_services" and is_admin:
+            await send_new_message(context, user_id, "🏷️ <b>УПРАВЛЕНИЕ УСЛУГАМИ</b>", await KeyboardBuilder.admin_services())
+        
+        elif data.startswith("admin_edit_service_") and is_admin:
+            sid = data.replace("admin_edit_service_", "")
+            s = await ContentManager.get_service_type(sid)
+            if s:
+                await send_new_message(context, user_id, f"🏷️ {s['name']}\n\nРедактирование:", KeyboardBuilder.admin_service_edit(sid, s))
+        
+        # ===== АДМИН: УПРАВЛЕНИЕ ТАРИФАМИ =====
+        elif data == "admin_plans" and is_admin:
+            await send_new_message(context, user_id, "💰 <b>УПРАВЛЕНИЕ ТАРИФАМИ</b>", await KeyboardBuilder.admin_plans())
+        
+        elif data.startswith("admin_edit_plan_") and is_admin:
+            pid = data.replace("admin_edit_plan_", "")
+            p = await ContentManager.get_plan(pid)
+            if p:
+                await send_new_message(context, user_id, f"💰 {p['name']}\n\nРедактирование:", KeyboardBuilder.admin_plan_edit(pid, p))
+        
+        # ===== АДМИН: ПОЛЬЗОВАТЕЛИ =====
         elif data == "admin_users" and is_admin:
             users = await UserManager.get_all_users()
             await send_new_message(context, user_id, f"👥 <b>ПОЛЬЗОВАТЕЛИ ({len(users)})</b>", KeyboardBuilder.admin_users(users))
@@ -1570,44 +1878,48 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_new_message(context, user_id, f"👥 Страница {page+1}:", KeyboardBuilder.admin_users(users, page))
         
         elif data.startswith("admin_user_") and is_admin:
-            tid = int(data.split("_")[-1])
-            target = await UserManager.get(tid)
+            target_id = int(data.split("_")[-1])
+            target = await UserManager.get(target_id)
             if target:
                 sub = target.get("subscribe_until", "Нет")[:10] if target.get("subscribe_until") else "Нет"
-                text = f"👤 <b>ПОЛЬЗОВАТЕЛЬ</b>\n\nID: <code>{tid}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\nСтатус: {'🔴 ЗАБАНЕН' if target.get('banned') else '🟢 АКТИВЕН'}"
-                await send_new_message(context, user_id, text, KeyboardBuilder.admin_user_actions(tid, target.get('banned', False)))
+                text = f"👤 <b>ПОЛЬЗОВАТЕЛЬ</b>\n\nID: <code>{target_id}</code>\nИмя: {target.get('first_name', '—')}\nЮзернейм: @{target.get('username', '—')}\nПодписка до: {sub}\nСтатус: {'🔴 ЗАБАНЕН' if target.get('banned') else '🟢 АКТИВЕН'}"
+                await send_new_message(context, user_id, text, KeyboardBuilder.admin_user_actions(target_id, target.get('banned', False)))
         
+        # ===== АДМИН: БАН/РАЗБАН =====
         elif data.startswith("admin_ban_") and is_admin:
-            tid = int(data.split("_")[-1])
-            await UserManager.ban_user(tid)
-            await send_new_message(context, user_id, "✅ Забанен", KeyboardBuilder.admin_panel())
+            target_id = int(data.split("_")[-1])
+            await UserManager.ban_user(target_id)
+            await send_new_message(context, user_id, "✅ Пользователь забанен", KeyboardBuilder.admin_panel())
         
         elif data.startswith("admin_unban_") and is_admin:
-            tid = int(data.split("_")[-1])
-            await UserManager.unban_user(tid)
-            await send_new_message(context, user_id, "✅ Разбанен", KeyboardBuilder.admin_panel())
+            target_id = int(data.split("_")[-1])
+            await UserManager.unban_user(target_id)
+            await send_new_message(context, user_id, "✅ Пользователь разбанен", KeyboardBuilder.admin_panel())
         
-        elif data.startswith("admin_give_") and is_admin:
-            tid = int(data.split("_")[-1])
-            await send_new_message(context, user_id, "📅 Выберите срок:", KeyboardBuilder.admin_give_sub(tid))
+        # ===== АДМИН: ВЫДАТЬ ПОДПИСКУ =====
+        elif data.startswith("admin_give_") and is_admin and not any(data.startswith(f"admin_give_{pid}_") for pid in ["1month", "3month", "6month", "12month"]):
+            target_id = int(data.split("_")[-1])
+            await send_new_message(context, user_id, "📅 Выберите срок:", KeyboardBuilder.admin_give_sub(target_id))
         
         elif data.startswith("admin_give_") and is_admin:
             parts = data.split("_")
             if len(parts) == 4:
-                pid = f"{parts[2]}_{parts[3]}"
-                tid = int(parts[4])
-                if pid in PLANS:
-                    plan = PLANS[pid]
-                    new_date = await UserManager.give_subscription(tid, plan["days"], admin_give=True)
+                plan_id = parts[2]
+                target_id = int(parts[3])
+                if plan_id in PLANS:
+                    plan = PLANS[plan_id]
+                    new_date = await UserManager.give_subscription(target_id, plan["days"], admin_give=True)
                     if new_date:
-                        await send_new_message(context, tid, f"🎉 Админ выдал {plan['name']} до {new_date.strftime('%d.%m.%Y')}")
+                        await send_new_message(context, target_id, f"🎉 Админ выдал {plan['name']} до {new_date.strftime('%d.%m.%Y')}")
                         await send_new_message(context, user_id, f"✅ Выдано {plan['days']} дней", KeyboardBuilder.admin_panel())
         
+        # ===== АДМИН: РЕДАКТИРОВАНИЕ ТЕКСТА =====
         elif data == "admin_edit_welcome" and is_admin:
             context.user_data['awaiting_welcome_edit'] = True
             current = await ContentManager.get_welcome_text()
             await send_new_message(context, user_id, f"📝 Текущий текст:\n{current}\n\nОтправьте новый текст:", KeyboardBuilder.back())
         
+        # ===== АДМИН: РАССЫЛКА =====
         elif data == "admin_mailing" and is_admin:
             context.user_data['awaiting_mailing'] = True
             await send_new_message(context, user_id, "📢 Отправьте текст рассылки:", KeyboardBuilder.back())
@@ -1617,6 +1929,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 asyncio.create_task(start_mailing(context, user_id, context.user_data['mailing_text']))
                 del context.user_data['mailing_text']
         
+        # ===== ВЫБОР СЕРВЕРА =====
         elif data == "select_server":
             await send_new_message(context, user_id, "🌍 Выберите сервер", await KeyboardBuilder.servers())
         
@@ -1625,19 +1938,50 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await UserManager.update_server(user_id, sid)
             await send_new_message(context, user_id, f"✅ Сервер выбран", KeyboardBuilder.back())
         
+        # ===== ПРОТОКОЛЫ =====
+        elif data.startswith("protocol_"):
+            protocol = data.replace("protocol_", "")
+            await UserManager.update_protocol(user_id, protocol)
+            await send_new_message(context, user_id, f"✅ Протокол {protocol} сохранен", KeyboardBuilder.back())
+        
+        # ===== УСТРОЙСТВА =====
         elif data == "my_devices":
             await send_new_message(context, user_id, "📱 Устройства", KeyboardBuilder.devices())
         
         elif data.startswith("device_"):
             device = data.replace("device_", "")
-            instr = {
-                "android": "📱 ANDROID\n\n1. OpenVPN Connect\n2. Импорт",
-                "ios": "🍏 IOS\n\n1. OpenVPN Connect\n2. Импорт"
+            instructions = {
+                "android": "📱 ANDROID\n\n1. Установите OpenVPN Connect\n2. Скачайте конфиг\n3. Импортируйте",
+                "ios": "🍏 IOS\n\n1. Установите OpenVPN Connect\n2. Скачайте конфиг\n3. Импортируйте",
+                "windows": "💻 WINDOWS\n\n1. Установите OpenVPN GUI\n2. Поместите конфиг в папку config\n3. Запустите",
+                "macos": "🍎 MACOS\n\n1. Установите Tunnelblick\n2. Откройте конфиг",
+                "linux": "🐧 LINUX\n\n1. sudo apt install openvpn\n2. sudo openvpn --config config.ovpn"
             }
             await send_new_message(context, user_id, instr.get(device, "Инструкция"), KeyboardBuilder.devices())
         
+        # ===== СКАЧАТЬ КОНФИГ =====
+        elif data == "download_config":
+            user = await UserManager.get(user_id)
+            if user and user.get("vpn_config") and user.get("subscribe_until"):
+                try:
+                    if datetime.fromisoformat(user["subscribe_until"]) > datetime.now():
+                        await send_new_message(context, user_id, f"🔗 <b>Ваш конфиг:</b>\n<code>{user['vpn_config']}</code>", KeyboardBuilder.back(), auto_delete=False)
+                        qr = xui_manager.generate_qr_code(user['vpn_config'])
+                        if qr:
+                            await context.bot.send_photo(chat_id=user_id, photo=qr)
+                        return
+                except:
+                    pass
+            await send_new_message(context, user_id, "❌ Подписка не активна", await KeyboardBuilder.plans("vpn"))
+        
     except Exception as e:
-        logger.error(f"Ошибка button_handler: {e}")
+        logger.error(f"Ошибка button_handler: {e}", exc_info=True)
+        try:
+            await query.answer("❌ Произошла ошибка", show_alert=True)
+        except:
+            pass
+
+# ==================== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ====================
 
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -1655,30 +1999,39 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     role = await UserManager.get_role(user_id)
     
-    if (await UserManager.get(user_id)).get("banned"):
+    user = await UserManager.get(user_id)
+    if user and user.get("banned"):
         await update.message.reply_text("⛔ Доступ заблокирован")
         return
     
+    # Проверяем статус бота для не-админов
+    if not await is_bot_enabled(user_id) and role != "admin":
+        await update.message.reply_text(config.MAINTENANCE_MESSAGE, parse_mode=ParseMode.HTML)
+        return
+    
+    # Обработка добавления тестера
     if context.user_data.get('awaiting_tester_add') and role == "admin":
         try:
-            tid = int(text.strip())
-            await UserManager.add_tester(tid)
-            await send_new_message(context, user_id, f"✅ Тестер {tid} добавлен", KeyboardBuilder.admin_panel())
+            target_id = int(text.strip())
+            await UserManager.add_tester(target_id)
+            await send_new_message(context, user_id, f"✅ Тестер {target_id} добавлен", KeyboardBuilder.admin_panel())
         except:
             await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.admin_panel())
         context.user_data.pop('awaiting_tester_add', None)
         return
     
+    # Обработка удаления тестера
     if context.user_data.get('awaiting_tester_remove') and role == "admin":
         try:
-            tid = int(text.strip())
-            await UserManager.remove_tester(tid)
-            await send_new_message(context, user_id, f"✅ Тестер {tid} удален", KeyboardBuilder.admin_panel())
+            target_id = int(text.strip())
+            await UserManager.remove_tester(target_id)
+            await send_new_message(context, user_id, f"✅ Тестер {target_id} удален", KeyboardBuilder.admin_panel())
         except:
             await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.admin_panel())
         context.user_data.pop('awaiting_tester_remove', None)
         return
     
+    # Обработка редактирования текста приветствия
     if context.user_data.get('awaiting_welcome_edit') and role == "admin":
         if await ContentManager.update_welcome_text(text):
             await send_new_message(context, user_id, "✅ Текст обновлен", KeyboardBuilder.admin_panel())
@@ -1687,12 +2040,14 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.pop('awaiting_welcome_edit', None)
         return
     
+    # Обработка рассылки
     if context.user_data.get('awaiting_mailing') and role == "admin":
         context.user_data['mailing_text'] = text
         await send_new_message(context, user_id, "📢 Подтвердите рассылку", KeyboardBuilder.admin_confirm_mailing())
         context.user_data.pop('awaiting_mailing', None)
         return
     
+    # Обработка редактирования услуги (тестеры)
     if context.user_data.get('editing_service') and context.user_data.get('editing_field') and (role == "admin" or role == "tester"):
         sid = context.user_data['editing_service']
         field = context.user_data['editing_field']
@@ -1703,14 +2058,26 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 "description": service["description"], "icon": service["icon"],
                 "enabled": service["enabled"], "sort_order": service["sort_order"]
             }
-            if field in update_data:
-                update_data[field] = text if field != "sort_order" else int(text)
+            try:
+                if field == "name":
+                    update_data["name"] = text
+                elif field == "emoji":
+                    update_data["emoji"] = text
+                elif field == "desc":
+                    update_data["description"] = text
+                
                 if await ContentManager.update_service_type(sid, update_data):
                     await send_new_message(context, user_id, "✅ Обновлено", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
+                else:
+                    await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
+            except Exception as e:
+                logger.error(f"Ошибка: {e}")
+                await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
         context.user_data.pop('editing_service', None)
         context.user_data.pop('editing_field', None)
         return
     
+    # Обработка редактирования тарифа (тестеры)
     if context.user_data.get('editing_plan') and context.user_data.get('editing_field') and (role == "admin" or role == "tester"):
         pid = context.user_data['editing_plan']
         field = context.user_data['editing_field']
@@ -1721,10 +2088,27 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 "emoji": plan["emoji"], "description": plan["description"],
                 "photo_id": plan["photo_id"], "service_type": plan["service_type"]
             }
-            if field in update_data:
-                update_data[field] = text if field in ("name", "emoji", "description") else int(text)
+            try:
+                if field == "name":
+                    update_data["name"] = text
+                elif field == "price":
+                    update_data["price"] = int(text)
+                elif field == "days":
+                    update_data["days"] = int(text)
+                elif field == "emoji":
+                    update_data["emoji"] = text
+                elif field == "desc":
+                    update_data["description"] = text
+                
                 if await ContentManager.update_plan(pid, update_data):
                     await send_new_message(context, user_id, "✅ Обновлено", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
+                else:
+                    await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
+            except ValueError:
+                await send_new_message(context, user_id, "❌ Неверный формат", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
+            except Exception as e:
+                logger.error(f"Ошибка: {e}")
+                await send_new_message(context, user_id, "❌ Ошибка", KeyboardBuilder.tester_panel() if role == "tester" else KeyboardBuilder.admin_panel())
         context.user_data.pop('editing_plan', None)
         context.user_data.pop('editing_field', None)
         return
@@ -1757,8 +2141,9 @@ async def start_mailing(context: ContextTypes.DEFAULT_TYPE, admin_id: int, text:
 @app.on_event("startup")
 async def startup():
     global telegram_app
-    logger.info("=" * 50)
-    logger.info("🚀 ЗАПУСК PLES VPN BOT")
+    logger.info("=" * 60)
+    logger.info("🚀 ЗАПУСК PLES VPN BOT v11.0 (ДВУХКОЛОНОЧНОЕ МЕНЮ)")
+    logger.info("=" * 60)
     
     await keep_alive.initialize()
     asyncio.create_task(keep_alive.ping_self())
@@ -1775,7 +2160,7 @@ async def startup():
     telegram_app = Application.builder().token(config.BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", cmd_start))
     telegram_app.add_handler(CallbackQueryHandler(button_handler))
-    telegram_app.add_handler(MessageHandler(filters.TEXT, text_message_handler))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     telegram_app.add_handler(MessageHandler(filters.PHOTO, text_message_handler))
     
     await telegram_app.initialize()
@@ -1787,6 +2172,9 @@ async def startup():
     asyncio.create_task(check_pending_payments())
     
     logger.info(f"✅ Вебхук: {webhook_url}")
+    logger.info(f"✅ Админы: {config.ADMIN_IDS}")
+    logger.info(f"✅ Статус бота: {'ВКЛЮЧЕН' if config.BOT_ENABLED else 'ВЫКЛЮЧЕН'}")
+    logger.info(f"✅ Режим техработ: {'ВКЛЮЧЕН' if config.MAINTENANCE_MODE else 'ВЫКЛЮЧЕН'}")
     logger.info("✅ Бот готов!")
 
 @app.on_event("shutdown")
@@ -1799,21 +2187,35 @@ async def shutdown():
 async def webhook(request: Request):
     if not telegram_app:
         return {"ok": False}
-    json_data = await request.json()
-    update = Update.de_json(json_data, telegram_app.bot)
-    await telegram_app.process_update(update)
-    return {"ok": True}
+    try:
+        json_data = await request.json()
+        update = Update.de_json(json_data, telegram_app.bot)
+        await telegram_app.process_update(update)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Ошибка в вебхуке: {e}")
+        return {"ok": False}
 
 @app.get("/")
 async def home():
-    return {"status": "online", "version": "8.0"}
+    return {
+        "status": "online", 
+        "version": "11.0",
+        "bot_enabled": config.BOT_ENABLED,
+        "maintenance_mode": config.MAINTENANCE_MODE
+    }
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "uptime": int(time.time() - startup_time)}
+    return {
+        "status": "healthy", 
+        "uptime": int(time.time() - startup_time),
+        "bot_enabled": config.BOT_ENABLED,
+        "maintenance_mode": config.MAINTENANCE_MODE
+    }
 
 # ==================== ЗАПУСК ====================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("ples_vpn_bot_fixed:app", host="0.0.0.0", port=port)
+    uvicorn.run("ples_vpn_bot_two_columns:app", host="0.0.0.0", port=port)
