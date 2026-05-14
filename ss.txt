@@ -1,4 +1,5 @@
 # profile-title: VPN TILAN ❄
+# description: GWG
 # profile-update-interval: 2
 # Date/Time: 2026-05-14 / 15:39 (Moscow)
 # Количество: 13
