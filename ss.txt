@@ -1,5 +1,5 @@
 # profile-title: VPN TILAN ❄
-# description: GWG
+#subscription-userinfo: upload=0; download=107374182; total=0; expire=1790951622
 # profile-update-interval: 2
 # Date/Time: 2026-05-14 / 15:39 (Moscow)
 # Количество: 13
