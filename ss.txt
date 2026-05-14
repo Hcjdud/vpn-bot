@@ -7,7 +7,8 @@
 # profile-web-page-url: https://t.me/gjkkfcs
 # hide-config: true
 # hide-servers: true
-
+# private-config: true
+# obfuscate: true
 
 vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@lte2.mambo-jambo.ru:443?encryption=none&flow=&security=reality&sni=sun6-21.userapi.com&fp=ios&pbk=DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM&sid=d7e1a111&type=xhttp&mode=stream-one#🇫🇲%20Обход%20%7C%20№1
 
