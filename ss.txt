@@ -4,8 +4,7 @@
 #subscription-userinfo: upload=0; download=0; total=10737418240; expire=0
 #announce: Тех поддержка anaevgrafova6@gmail.com
 
+
 vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@lte2.mambo-jambo.ru:443?encryption=none&flow=&security=reality&sni=sun6-21.userapi.com&fp=ios&pbk=DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM&sid=dde66ef1&type=xhttp&mode=stream-one#TILAN%20%E2%9D%84%20%7C%20%E2%84%961
-
 vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@ydlte.mambo-jambo.ru:8443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=ads.x5.ru&fp=edge&pbk=DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM&sid=3decb73e&type=tcp#TILAN%20%E2%9D%84%20%7C%20%E2%84%962
-
 vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@ydlte.mambo-jambo.ru:443?encryption=none&flow=&security=none&type=ws#TILAN%20%E2%9D%84%20%7C%20%E2%84%963
