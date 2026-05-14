@@ -4,73 +4,8 @@
 #subscription-userinfo: upload=0; download=0; total=10737418240; expire=0
 #announce: Тех поддержка anaevgrafova6@gmail.com
 
-{
-  "dns": {
-    "hosts": {
-      "dns.google": ["8.8.8.8", "8.8.4.4"],
-      "dns.apple.com": ["0.0.0.0"],
-      "dns.quad9.net": ["9.9.9.9", "149.112.112.112"],
-      "mask.icloud.com": ["0.0.0.0"],
-      "doh.dns.apple.com": ["0.0.0.0"],
-      "cloudflare-dns.com": ["104.16.248.249", "104.16.249.249"],
-      "mask-h2.icloud.com": ["0.0.0.0"],
-      "common.dot.dns.yandex.net": ["77.88.8.8"]
-    },
-    "servers": [
-      { "tag": "ParallelQuery", "address": "https://dns.google/dns-query" },
-      { "tag": "ParallelQuery", "address": "https://cloudflare-dns.com/dns-query" },
-      { "tag": "ParallelQuery", "address": "https://dns.quad9.net/dns-query" },
-      {
-        "tag": "YandexDNS",
-        "address": "https://common.dot.dns.yandex.net/dns-query",
-        "domains": ["domain:.ru", "domain:.рф", "domain:.su", "domain:.by", "vk.com", "vk.ru", "vk.me", "vk.cc", "vk.link", "vkontakte.ru", "userapi.com", "vk-cdn.me", "vk-cdn.net", "vkuser.net", "vkuseraudio.com", "vkuseraudio.net", "vkuseraudio.ru", "vkusercdn.ru", "vkuserlive.net", "vkuserphoto.ru", "vkuservideo.com", "vkuservideo.net", "vkuservideo.ru", "vkvideo.ru", "vk-portal.net", "vk-apps.com", "vk-apps.ru", "vk-analytics.ru", "vkcloud-static.ru", "cdn-vk.ru", "mradx.net", "mvk.com", "vkcache.com", "vkgo.app", "vklive.app", "vkmessenger.app", "vkmessenger.com", "mail.ru", "imgsmail.ru", "ok.ru", "okcdn.ru", "mycdn.me", "yandex.ru", "yandex.com", "yandex.net", "yandex.by", "yandex.kz", "yandex.uz", "yandex.cloud", "ya.ru", "yastatic.net", "yastat.net", "yandexcloud.net", "yandexmetrica.com", "yandexadexchange.net", "yandexcom.net", "yandexwebcache.org", "yads.tech", "yandex-bank.net", "yandex-team.ru", "adfox.ru", "admetrica.ru", "naydex.net", "rostaxi.org", "turbopages.org", "webvisor.com", "webvisor.org", "dzen.ru", "auto.ru", "kinopoisk.ru", "ozon.ru", "ozone.ru", "ozonusercontent.com", "wildberries.ru", "wb.ru", "wbbasket.ru", "wb-basket.ru", "wbpay.ru", "paywb.com", "rwb.ru", "wibes.ru", "geobasket.ru", "avito.ru", "avito.st", "sberbank.ru", "sber.ru", "tbank.ru", "cdn-tinkoff.ru", "vtb.ru", "alfabank.ru", "gosuslugi.ru", "gov.ru", "government.ru", "kremlin.ru", "mos.ru", "mosreg.ru", "nalog.ru", "cbr.ru", "edu.ru", "2gis.ru", "2gis.com", "rzd.ru", "rutube.ru", "rutubelist.ru", "rtbcdn.ru", "max.ru", "rambler.ru", "lenta.ru", "gazeta.ru", "rbc.ru", "kp.ru", "pochta.ru", "lemanapro.ru", "t2.ru", "x5.tech", "x5.com", "x5.group", "x5.media", "x5.team", "x5.ai", "x5.digital", "x5static.net", "okko.tv", "okko.sport", "perekrestok.com", "chizhik.club", "5post.market", "okolo.app", "emias.info", "mgfoms.ru", "tutu.ru", "oneme.ru", "domain:local", "domain:localhost", "domain:lan", "domain:internal", "domain:home.arpa"],
-        "skipFallback": true
-      }
-    ],
-    "queryStrategy": "UseIPv4",
-    "enableParallelQuery": true
-  },
-  "routing": {
-    "rules": [
-      { "port": "53", "type": "field", "network": "tcp,udp", "outboundTag": "dns-out" },
-      { "type": "field", "domain": ["geosite:category-ads-all"], "outboundTag": "block" },
-      { "type": "field", "protocol": ["bittorrent"], "outboundTag": "block" },
-      { "type": "field", "domain": ["geosite:youtube", "geosite:telegram", "geosite:github", "geosite:twitter", "geosite:facebook", "geosite:netflix", "geosite:discord", "geosite:spotify", "domain:openai.com", "domain:chatgpt.com", "domain:oaistatic.com", "domain:oaiusercontent.com", "domain:linkedin.com", "domain:medium.com", "domain:wikipedia.org", "domain:wikimedia.org", "domain:whatsapp.com", "domain:whatsapp.net", "domain:signal.org"], "outboundTag": "proxy" },
-      { "type": "field", "domain": ["domain:.ru", "domain:.рф", "domain:.su", "domain:.by", "vk.com", "vk.ru", "vk.me", "vk.cc", "vk.link", "vkontakte.ru", "userapi.com", "vk-cdn.me", "vk-cdn.net", "vkuser.net", "vkuseraudio.com", "vkuseraudio.net", "vkuseraudio.ru", "vkusercdn.ru", "vkuserlive.net", "vkuserphoto.ru", "vkuservideo.com", "vkuservideo.net", "vkuservideo.ru", "vkvideo.ru", "vk-portal.net", "vk-apps.com", "vk-apps.ru", "vk-analytics.ru", "vkcloud-static.ru", "cdn-vk.ru", "mradx.net", "mvk.com", "vkcache.com", "vkgo.app", "vklive.app", "vkmessenger.app", "vkmessenger.com", "mail.ru", "imgsmail.ru", "ok.ru", "okcdn.ru", "mycdn.me", "yandex.ru", "yandex.com", "yandex.net", "yandex.by", "yandex.kz", "yandex.uz", "yandex.cloud", "yandex.aero", "yandex.co.il", "yandex.com.am", "yandex.com.ge", "yandex.com.ru", "yandex.com.tr", "yandex.com.ua", "yandex.de", "yandex.ee", "yandex.eu", "yandex.fi", "yandex.fr", "yandex.jobs", "yandex.kg", "yandex.lt", "yandex.lv", "yandex.md", "yandex.org", "yandex.pl", "yandex.st", "yandex.sx", "yandex.tj", "yandex.tm", "yandex.tr", "yandex.ua", "yandex.uz", "ya.ru", "yastatic.net", "yastat.net", "yandexcloud.net", "yandexmetrica.com", "yandexadexchange.net", "yandexcom.net", "yandexwebcache.org", "yads.tech", "yandex-bank.net", "yandex-team.ru", "yandex-images.clstorage.net", "adfox.ru", "admetrica.ru", "naydex.net", "rostaxi.org", "turbopages.org", "webvisor.com", "webvisor.org", "dzen.ru", "auto.ru", "kinopoisk.ru", "kinopoisk-ru.clstorage.net", "ozon.ru", "ozone.ru", "ozonusercontent.com", "wildberries.ru", "wb.ru", "wbbasket.ru", "wb-basket.ru", "wbpay.ru", "paywb.com", "rwb.ru", "wibes.ru", "geobasket.ru", "avito.ru", "avito.st", "sberbank.ru", "sber.ru", "tbank.ru", "cdn-tinkoff.ru", "vtb.ru", "alfabank.ru", "gosuslugi.ru", "gov.ru", "government.ru", "kremlin.ru", "mos.ru", "mosreg.ru", "spb.ru", "nalog.ru", "cbr.ru", "edu.ru", "digital.gov.ru", "izbirkom.ru", "2gis.ru", "2gis.com", "rzd.ru", "rutube.ru", "rutubelist.ru", "rtbcdn.ru", "max.ru", "rambler.ru", "lenta.ru", "gazeta.ru", "rbc.ru", "kp.ru", "pochta.ru", "tutu.ru", "lemanapro.ru", "t2.ru", "oneme.ru", "x5.tech", "x5.com", "x5.group", "x5.media", "x5.team", "x5.ai", "x5.digital", "x5static.net", "okko.tv", "okko.sport", "perekrestok.com", "chizhik.club", "5post.market", "okolo.app", "emias.info", "mgfoms.ru", "res-nsdi.ru", "auth-nsdi.ru", "geosite:apple", "geosite:microsoft", "geosite:steam", "geosite:epicgames"], "outboundTag": "direct" },
-      { "ip": ["geoip:private", "geoip:ru", "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/3"], "type": "field", "outboundTag": "direct" },
-      { "type": "field", "network": "tcp,udp", "outboundTag": "proxy" }
-    ],
-    "domainMatcher": "hybrid",
-    "domainStrategy": "IPIfNonMatch"
-  },
-  "inbounds": [
-    { "tag": "socks", "port": 10808, "listen": "127.0.0.1", "protocol": "socks", "settings": { "udp": true, "auth": "noauth" }, "sniffing": { "enabled": true, "routeOnly": true, "destOverride": ["http", "tls", "quic"] } },
-    { "tag": "http", "port": 10809, "listen": "127.0.0.1", "protocol": "http", "settings": { "allowTransparent": false, "auth": "noauth" }, "sniffing": { "enabled": true, "routeOnly": true, "destOverride": ["http", "tls", "quic"] } }
-  ],
-  "outbounds": [
-    {
-      "tag": "proxy",
-      "protocol": "vless",
-      "settings": { "vnext": [{ "address": "lte2.mambo-jambo.ru", "port": 443, "users": [{ "id": "a50c3dd7-6e1c-446c-a83e-8fdcefe11d60", "encryption": "none", "flow": "" }] }] },
-      "streamSettings": { "network": "xhttp", "xhttpSettings": { "mode": "stream-one", "host": "" }, "security": "reality", "realitySettings": { "serverName": "sun6-21.userapi.com", "publicKey": "DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM", "shortId": "dde66ef1", "spiderX": "/", "fingerprint": "ios" } }
-    },
-    {
-      "tag": "proxy2",
-      "protocol": "vless",
-      "settings": { "vnext": [{ "address": "ydlte.mambo-jambo.ru", "port": 8443, "users": [{ "id": "a50c3dd7-6e1c-446c-a83e-8fdcefe11d60", "encryption": "none", "flow": "xtls-rprx-vision" }] }] },
-      "streamSettings": { "network": "tcp", "tcpSettings": {}, "security": "reality", "realitySettings": { "serverName": "ads.x5.ru", "publicKey": "DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM", "shortId": "3decb73e", "spiderX": "/", "fingerprint": "edge" } }
-    },
-    {
-      "tag": "proxy3",
-      "protocol": "vless",
-      "settings": { "vnext": [{ "address": "ydlte.mambo-jambo.ru", "port": 443, "users": [{ "id": "a50c3dd7-6e1c-446c-a83e-8fdcefe11d60", "encryption": "none", "flow": "" }] }] },
-      "streamSettings": { "network": "ws", "wsSettings": { "headers": { "Host": "" } }, "security": "none" }
-    },
-    { "tag": "dns-out", "protocol": "dns", "settings": { "blockTypes": [65, 28], "nonIPQuery": "reject" } },
-    { "tag": "direct", "protocol": "freedom" },
-    { "tag": "block", "protocol": "blackhole" },
-    { "tag": "block-http", "protocol": "blackhole", "settings": { "response": { "type": "http" } } }
-  ],
-  "remarks": "TILAN ❄",
-  "log": { "access": "/storage/emulated/0/Android/data/com.happproxy/files/assets/logs/access/access_log.txt", "error": "/storage/emulated/0/Android/data/com.happproxy/files/assets/logs/error/error_log.txt" }
-}
+vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@lte2.mambo-jambo.ru:443?encryption=none&flow=&security=reality&sni=sun6-21.userapi.com&fp=ios&pbk=DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM&sid=dde66ef1&type=xhttp&mode=stream-one#TILAN%20%E2%9D%84%20%7C%20%E2%84%961
+
+vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@ydlte.mambo-jambo.ru:8443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=ads.x5.ru&fp=edge&pbk=DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM&sid=3decb73e&type=tcp#TILAN%20%E2%9D%84%20%7C%20%E2%84%962
+
+vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@ydlte.mambo-jambo.ru:443?encryption=none&flow=&security=none&type=ws#TILAN%20%E2%9D%84%20%7C%20%E2%84%963
