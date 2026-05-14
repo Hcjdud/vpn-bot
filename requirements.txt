@@ -1,9 +1,0 @@
-fastapi
-uvicorn[standard]
-python-telegram-bot
-aiosqlite
-requests
-aiohttp
-qrcode
-pypng
-cryptobot-python
