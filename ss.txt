@@ -5,6 +5,9 @@
 # subscription-userinfo: upload=0; download=0; total=0; expire=1781730000
 # announce: Тех поддержка: @gjkkfcs | Сайт: great.com | Истекает: 16.09.2026 | Автообновление - 1 ч.
 # profile-web-page-url: https://t.me/gjkkfcs
+# hide-config: true
+# hide-servers: true
+
 
 vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@lte2.mambo-jambo.ru:443?encryption=none&flow=&security=reality&sni=sun6-21.userapi.com&fp=ios&pbk=DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM&sid=d7e1a111&type=xhttp&mode=stream-one#🇫🇲%20Обход%20%7C%20№1
 
