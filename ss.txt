@@ -1,7 +1,7 @@
 # profile-title: VPN TILAN ❄
 # support-url: https://t.me/gjkkfcs
 # announce: Скачай MAX
-# subscription-userinfo: upload=31; download=19; total=22; expire=02.12.2026
+# subscription-userinfo: upload=31000; download=19000; total=2002; expire=03.12.2026
 # profile-update-interval: 1
 # Date/Time: 2026-05-14 / 15:39 (Moscow)
 # Количество: 13
