@@ -1,6 +1,8 @@
 # profile-title: VPN TILAN ❄
-#subscription-userinfo: upload=0; download=107374182; total=0; expire=1790951622
-# profile-update-interval: 2
+# support-url: https://t.me/gjkkfcs
+# announce: 14.05.2026 18:29 | Автообновление - 1 ч. | Лимит 0.10 из 5 GB
+# subscription-userinfo: upload=0; download=107374182; total=1; expire=1790951622
+# profile-update-interval: 1
 # Date/Time: 2026-05-14 / 15:39 (Moscow)
 # Количество: 13
 # For more info and VPN-configs - visit: www.github.com
