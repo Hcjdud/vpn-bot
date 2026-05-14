@@ -1,6 +1,6 @@
 # profile-title: VPN TILAN ❄
 # support-url: https://t.me/gjkkfcs
-# help-url: https://greaft.ru
+# help-url: https://t.me/gjkkfcs
 # profile-update-interval: 1
 # subscription-userinfo: upload=0; download=0; total=0; expire=1781730000
 # announce: Тех поддержка: @gjkkfcs | Сайт: great.com | Истекает: 16.09.2026 | Автообновление - 1 ч.
