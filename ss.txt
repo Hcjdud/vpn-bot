@@ -4,7 +4,6 @@
 # Количество: 13
 # For more info and VPN-configs - visit: www.github.com
 
-vless://hy2_nrsipx3s:zpQI3Vu7o9NdC6rS3L8JYXC7Q58HYUjv@lv2.cleanersaz.help:443?type=hysteria&security=tls&alpn=h3&allowInsecure=1&sni=washing.help#🇫🇲%20Обход%201
-vless://hy2_nrsipx3s:zpQI3Vu7o9NdC6rS3L8JYXC7Q58HYUjv@lv2.cleanersaz.help:443?type=hysteria&security=tls&alpn=h3&allowInsecure=1&sni=washing.help#🇫🇲%20Обход%202
-vless://hy2_nrsipx3s:zpQI3Vu7o9NdC6rS3L8JYXC7Q58HYUjv@lv2.cleanersaz.help:443?type=hysteria&security=tls&alpn=h3&allowInsecure=1&sni=washing.help#🇫🇲%20Обход%203
-vless://hy2_nrsipx3s:zpQI3Vu7o9NdC6rS3L8JYXC7Q58HYUjv@lv2.cleanersaz.help:443?type=hysteria&security=tls&alpn=h3&allowInsecure=1&sni=washing.help#🇫🇲%20Обход%204
+vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@lte2.mambo-jambo.ru:443?type=xhttp&mode=stream-one&security=reality&sni=sun6-21.userapi.com&pbk=DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM&sid=dde66ef1&spx=/&fp=ios#🇫🇲%20Обход
+vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@ydlte.mambo-jambo.ru:8443?type=tcp&security=reality&sni=ads.x5.ru&pbk=DrWq_ysFaGPGgRFcHevMPoruwYMRXryW6i_cwE7CuCM&sid=3decb73e&spx=/&fp=edge&flow=xtls-rprx-vision#🇫🇲%20Обход%202
+vless://a50c3dd7-6e1c-446c-a83e-8fdcefe11d60@ydlte.mambo-jambo.ru:443?type=ws&security=none#🇫🇲%20Обход%203
