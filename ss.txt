@@ -4,7 +4,7 @@
 # profile-update-interval: 1
 # subscription-userinfo: upload=0; download=0; total=0; expire=1781730000
 # announce: Тех поддержка: @zyhup | Истекает: 16.09.2026 
-# profile-web-page-url: https://t.me/gjkkfcs
+# profile-web-page-url: https://t.me/zyhup
 # hide-config: true
 # hide-servers: true
 # private-config: true
