@@ -2,7 +2,7 @@
 # password: SASA11
 # support-url: https://t.me/zyhupBot
 # profile-update-interval: 1
-# subscription-userinfo: upload=0; download=0; total=0; expire=1781740800
+# subscription-userinfo: upload=0; download=0; total=0; expire=14.06.2026
 # announce: Тех поддержка: @zyhup | Может не работать 
 # profile-web-page-url: https://t.me/zyhup
 # hide-config: true
@@ -14,3 +14,4 @@ vless://4b481152-ba7f-4445-8cc0-d33d58546e23@138.124.32.76:443?type=raw&security
 vless://a8da758c-510d-4827-83cf-2f2b51c49c5b@download.lastilhame.monster:443?type=tcp&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=WOPZy8oOnvHN21pLYobZAGa7sVp7op3q575B5BaFxkU&sid=faa900664bad&sni=www.techradar.com#🇳🇱%20Нидерланды
 vless://75807638-6f19-07d0-ae08-38492ee85c88@cl-ru-tw.fastaichat.ru:52006?type=tcp&headerType=none&security=tls&encryption=none&sni=cl-ru-tw.fastaichat.ru&flow=xtls-rprx-vision#🇷🇺%20Россия
 vless://1ebb7caf-8704-48de-adbb-30b0b821c650@dns.dressforida.monster:443?type=raw&security=reality&flow=xtls-rprx-vision&fp=chrome&pbk=4YLfHf90V012Oyd2wHbwAXaJNvNUGrKWmatTKc165U8&sid=9eff19e0405a&sni=www.microsoft.com#🇫🇮%20Финляндия
+ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTo0YTJyZml4b3BoZGpmZmE4S1ZBNEFh@193.29.139.162:8080#🇳🇱%20Нидерланды
